@@ -2,7 +2,9 @@
 import os
 import time
 
-from .db import now
+from datetime import datetime, timezone
+
+from .db import now, put_metrics
 from .sources import steam
 
 SCHEMA = """
@@ -28,8 +30,14 @@ def collect(conn):
         if appid not in known:
             conn.execute("INSERT OR REPLACE INTO steam_apps VALUES (?,?)", (appid, steam.app_name(appid)))
             time.sleep(1.5)  # store API is rate limited
+    tracked = {}
     for appid in TRACKED:
-        conn.execute("INSERT INTO steam_tracked VALUES (?,?,?)", (ts, appid, steam.current_players(appid)))
+        tracked[appid] = steam.current_players(appid)
+        conn.execute("INSERT INTO steam_tracked VALUES (?,?,?)", (ts, appid, tracked[appid]))
+    iso = lambda t: datetime.fromtimestamp(t, timezone.utc).isoformat(timespec="seconds")
+    put_metrics(conn, [("steam.online", iso(t), n) for t, n in pts])
+    put_metrics(conn, [("steam.in_game_top100", ts, sum(t[2] for t in top))])
+    put_metrics(conn, [("steam.players.%d" % a, ts, n) for a, n in tracked.items() if n is not None])
     conn.commit()
     print(f"steam: {len(pts)} global points, {len(top)} top games, {len(TRACKED)} tracked")
 

@@ -2,7 +2,7 @@ import argparse
 import os
 import time
 
-from . import db, geo, stats, steam_job
+from . import correlate, db, geo, jobs, stats, steam_job
 from .sources import wg_gesucht
 
 DB_PATH = os.environ.get("STATKING_DB", "data/statking.db")
@@ -35,21 +35,22 @@ def cmd_steam_report(args):
 
 
 def cmd_daemon(args):
-    interval = float(os.environ.get("SCRAPE_INTERVAL_HOURS", "24")) * 3600
-    while True:
-        try:
-            cmd_scrape(args)
-        except Exception as e:  # keep the loop alive
-            print(f"scrape failed: {e}")
-        try:
-            cmd_geocode(args)
-        except Exception as e:
-            print(f"geocode failed: {e}")
-        try:
-            cmd_steam_scrape(args)
-        except Exception as e:
-            print(f"steam failed: {e}")
-        time.sleep(interval)
+    jobs.daemon(DB_PATH)
+
+
+def cmd_run(args):
+    """Run named jobs now (default: all), ignoring intervals."""
+    jobs.run_due(db.connect(DB_PATH), args.jobs or None, force=True)
+
+
+def cmd_series(args):
+    for name, n, lo, hi in correlate.list_series(db.connect(DB_PATH)):
+        print(f"{name:45} {n:>7} points  {lo} .. {hi}")
+
+
+def cmd_corr(args):
+    r, n = correlate.correlate(db.connect(DB_PATH), args.a, args.b, args.lag)
+    print("not enough overlapping days" if r is None else f"r = {r:+.3f} over {n} days (lag {args.lag}d)")
 
 
 def cmd_report(args):
@@ -67,7 +68,15 @@ def main():
     p = argparse.ArgumentParser(prog="statking")
     sub = p.add_subparsers(required=True)
     cats = list(wg_gesucht.CATEGORIES)
-    for name, fn in (("scrape", cmd_scrape), ("daemon", cmd_daemon), ("report", cmd_report)):
+    sub.add_parser("daemon").set_defaults(fn=cmd_daemon)
+    rn = sub.add_parser("run", help="run collectors now")
+    rn.add_argument("jobs", nargs="*", choices=list(jobs.JOBS), help="default: all")
+    rn.set_defaults(fn=cmd_run)
+    sub.add_parser("series").set_defaults(fn=cmd_series)
+    co = sub.add_parser("corr", help="correlate two series: statking corr A B --lag 1")
+    co.add_argument("a"); co.add_argument("b"); co.add_argument("--lag", type=int, default=0)
+    co.set_defaults(fn=cmd_corr)
+    for name, fn in (("scrape", cmd_scrape), ("report", cmd_report)):
         sp = sub.add_parser(name)
         sp.add_argument("categories", nargs="*", default=cats, help=f"any of: {cats}")
         sp.set_defaults(fn=fn)
