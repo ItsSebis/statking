@@ -8,12 +8,12 @@ def _days(a, b):
     return (datetime.fromisoformat(b) - datetime.fromisoformat(a)).total_seconds() / 86400
 
 
-def district_table(conn, category="wg", active_only=True):
-    q = "SELECT district, price_eur, size_m2, first_seen, last_seen, gone_at FROM listings WHERE category=? AND price_eur>0 AND size_m2>0"
+def district_table(conn, category="wg", active_only=True, city="kiel"):
+    q = "SELECT district, price_eur, size_m2, first_seen, last_seen, gone_at FROM listings WHERE category=? AND city=? AND price_eur>0 AND size_m2>0"
     if active_only:
         q += " AND gone_at IS NULL"
     by = {}
-    for r in conn.execute(q, (category,)):
+    for r in conn.execute(q, (category, city)):
         by.setdefault(r["district"] or "?", []).append(r)
     rows = []
     for d, rs in by.items():
@@ -22,20 +22,20 @@ def district_table(conn, category="wg", active_only=True):
     return sorted(rows, key=lambda x: -x[2])
 
 
-def lifetimes(conn, category="wg"):
+def lifetimes(conn, category="wg", city="kiel"):
     """Days listed for listings that have vanished (lower bound: resolution = scrape interval)."""
     return [
         _days(r["first_seen"], r["gone_at"])
-        for r in conn.execute("SELECT first_seen, gone_at FROM listings WHERE category=? AND gone_at IS NOT NULL", (category,))
+        for r in conn.execute("SELECT first_seen, gone_at FROM listings WHERE category=? AND city=? AND gone_at IS NOT NULL", (category, city))
     ]
 
 
-def print_report(conn, category="wg"):
-    print(f"\n=== {category}: median €/m² by district (active listings) ===")
+def print_report(conn, category="wg", city="kiel"):
+    print(f"\n=== {city}/{category}: median €/m² by district (active listings) ===")
     print(f"{'district':28} {'n':>4} {'€/m²':>7} {'€ median':>9}")
-    for d, n, m2, p in district_table(conn, category):
+    for d, n, m2, p in district_table(conn, category, True, city):
         print(f"{d:28} {n:>4} {m2:>7.1f} {p:>9.0f}")
-    lt = lifetimes(conn, category)
+    lt = lifetimes(conn, category, city)
     if lt:
         print(f"\nvanished listings: {len(lt)}, median lifetime {statistics.median(lt):.1f} days")
     else:

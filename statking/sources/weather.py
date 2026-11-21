@@ -1,10 +1,25 @@
 """DWD weather via Bright Sky (a free JSON API over DWD open data, no key).
 Hourly values are aggregated to daily series."""
+from datetime import date, timedelta
+
 import requests
 
 API = "https://api.brightsky.dev/weather"
 UA = "statking/0.1 (personal research)"
-STATIONS = {"hamburg": "01975", "kiel": "02564"}  # Hamburg-Fuhlsbuettel, Kiel-Holtenau
+
+
+def nearest_station(lat, lon, max_dist=60000):
+    """Nearest DWD station (with history) to a point -> (dwd_station_id, name, distance_m)."""
+    r = requests.get("https://api.brightsky.dev/sources", params={"lat": lat, "lon": lon, "max_dist": max_dist},
+                     headers={"User-Agent": UA}, timeout=30)
+    r.raise_for_status()
+    cands = [x for x in r.json()["sources"] if x.get("dwd_station_id") and x["observation_type"] == "historical"
+             and x.get("first_record") and x["first_record"] < "2024-01-01"
+             and x.get("last_record") and x["last_record"][:10] >= (date.today() - timedelta(days=60)).isoformat()]
+    # prefer full synoptic stations (WMO id): many small stations only measure precipitation and have no weather rows
+    full = [x for x in cands if x.get("wmo_station_id")]
+    best = min(full or cands, key=lambda x: x["distance"])
+    return best["dwd_station_id"], best["station_name"], best["distance"]
 
 
 def fetch_hourly(station: str, start: str, end: str):

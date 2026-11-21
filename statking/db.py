@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS metrics (
     series TEXT NOT NULL, ts TEXT NOT NULL, value REAL,
     PRIMARY KEY (series, ts)
 );
+CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS job_runs (job TEXT PRIMARY KEY, ts TEXT NOT NULL, ok INTEGER NOT NULL, note TEXT);
 CREATE TABLE IF NOT EXISTS district_metrics (
     dataset TEXT NOT NULL, merkmal TEXT NOT NULL, district TEXT NOT NULL, ts TEXT NOT NULL, value REAL,
@@ -71,9 +72,16 @@ def connect(path: str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA + GEO_SCHEMA + HISTORY_SCHEMA)
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(listings)")}
-    for c in ("lat", "lon"):  # lightweight migration
+    for c in ("lat", "lon"):  # lightweight migrations
         if c not in cols:
             conn.execute(f"ALTER TABLE listings ADD COLUMN {c} REAL")
+    if "city" not in cols:
+        conn.execute("ALTER TABLE listings ADD COLUMN city TEXT NOT NULL DEFAULT 'kiel'")  # everything scraped so far was Kiel
+    if "city" not in {r["name"] for r in conn.execute("PRAGMA table_info(runs)")}:
+        conn.execute("ALTER TABLE runs ADD COLUMN city TEXT NOT NULL DEFAULT 'kiel'")
+    # rent series gained a city segment: rent.<cat>.x -> rent.<city>.<cat>.x
+    conn.execute("""UPDATE OR IGNORE metrics SET series='rent.kiel.'||substr(series,6)
+                    WHERE (series LIKE 'rent.wg.%' OR series LIKE 'rent.1zi.%' OR series LIKE 'rent.wohnung.%')""")
     conn.execute(
         """INSERT OR IGNORE INTO price_history (source,id,ts,price_eur)
            SELECT source,id,first_seen,price_eur FROM listings WHERE price_eur IS NOT NULL""")
@@ -81,7 +89,7 @@ def connect(path: str) -> sqlite3.Connection:
     return conn
 
 
-def save_run(conn, source: str, category: str, items: list, complete: bool) -> tuple:
+def save_run(conn, source: str, category: str, items: list, complete: bool, city: str = "kiel") -> tuple:
     """Upsert listings. If the crawl was complete, mark unseen listings as gone.
     Returns (new, gone)."""
     ts = now()
@@ -95,11 +103,11 @@ def save_run(conn, source: str, category: str, items: list, complete: bool) -> t
             conn.execute("INSERT OR IGNORE INTO price_history VALUES (?,?,?,?)", (source, it["id"], ts, it["price_eur"]))
             conn.execute(
                 """INSERT INTO listings (source,id,category,title,district,street,flat_desc,
-                   price_eur,size_m2,available_from,url,first_seen,last_seen)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   price_eur,size_m2,available_from,url,first_seen,last_seen,city)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (source, it["id"], category, it["title"], it["district"], it["street"],
                  it["flat_desc"], it["price_eur"], it["size_m2"], it["available_from"],
-                 it["url"], ts, ts),
+                 it["url"], ts, ts, city),
             )
         else:
             if cur["price_eur"] != it["price_eur"]:
@@ -112,13 +120,13 @@ def save_run(conn, source: str, category: str, items: list, complete: bool) -> t
     gone = 0
     if complete and items:
         gone = conn.execute(
-            """UPDATE listings SET gone_at=? WHERE source=? AND category=?
+            """UPDATE listings SET gone_at=? WHERE source=? AND category=? AND city=?
                AND gone_at IS NULL AND last_seen<?""",
-            (ts, source, category, ts),
+            (ts, source, category, city, ts),
         ).rowcount
-    conn.execute("INSERT INTO runs VALUES (?,?,?,?,?)", (ts, source, category, len(items), int(complete)))
+    conn.execute("INSERT INTO runs (ts,source,category,listings_found,complete,city) VALUES (?,?,?,?,?,?)", (ts, source, category, len(items), int(complete), city))
     if complete:
-        record_rent_metrics(conn, source, category, ts, new, gone)
+        record_rent_metrics(conn, source, category, ts, new, gone, city)
     conn.commit()
     return new, gone
 
@@ -128,23 +136,22 @@ def put_metrics(conn, rows):
     conn.executemany("INSERT OR REPLACE INTO metrics VALUES (?,?,?)", list(rows))
 
 
-def record_rent_metrics(conn, source, category, ts, new, gone):
+def record_rent_metrics(conn, source, category, ts, new, gone, city="kiel"):
     """Snapshot of the market at this scrape: city + per-district median EUR/m2."""
-    from . import geo  # local import: geo imports db
-    import json, statistics
-    polys = [f["properties"]["name"] for f in json.load(open(os.path.join(
-        os.path.dirname(__file__), "web", "static", "kiel_districts.geojson")))["features"]]
+    from . import cities, geo  # local imports: geo imports db
+    import statistics
+    polys = cities.district_names(city)
     rows = conn.execute(
-        """SELECT district, price_eur, size_m2 FROM listings WHERE source=? AND category=?
-           AND gone_at IS NULL AND price_eur>0 AND size_m2>0""", (source, category)).fetchall()
-    pre = f"rent.{category}"
+        """SELECT district, price_eur, size_m2 FROM listings WHERE source=? AND category=? AND city=?
+           AND gone_at IS NULL AND price_eur>0 AND size_m2>0""", (source, category, city)).fetchall()
+    pre = f"rent.{city}.{category}"
     out = [(f"{pre}.active", ts, len(rows)), (f"{pre}.new", ts, new), (f"{pre}.gone", ts, gone)]
     if rows:
         out.append((f"{pre}.median_eur_m2", ts, statistics.median(r["price_eur"] / r["size_m2"] for r in rows)))
         out.append((f"{pre}.median_price", ts, statistics.median(r["price_eur"] for r in rows)))
     by = {}
     for r in rows:
-        d = geo.polygon_name(r["district"], polys)
+        d = geo.polygon_name(r["district"], polys, city)
         if d:
             by.setdefault(d, []).append(r["price_eur"] / r["size_m2"])
     for d, v in by.items():

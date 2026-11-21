@@ -1,12 +1,19 @@
-"""One-off: download Kiel Stadtteil boundaries from OSM (Overpass) -> GeoJSON.
-Usage: python tools/fetch_districts.py statking/web/static/kiel_districts.geojson"""
+"""One-off: download district boundaries of a registry city from OSM (Overpass) -> GeoJSON.
+Usage: python tools/fetch_districts.py <city> [admin_level]   (writes statking/web/static/districts/<city>.geojson)"""
 import json
+import os
 import subprocess
 import sys
 import time
 
-Q = ('[out:json][timeout:90];area["name"="Kiel"]["boundary"="administrative"]["admin_level"="6"]->.k;'
-     'rel(area.k)["boundary"="administrative"]["admin_level"="10"];out geom;')
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from statking import cities  # noqa: E402
+
+
+def query(osm_name, level, area_level=None):
+    al = f'"admin_level"="{area_level}"' if area_level else '"admin_level"~"^(4|6)$"'
+    return (f'[out:json][timeout:180];area["name"="{osm_name}"]["boundary"="administrative"][{al}]->.k;'
+            f'rel(area.k)["boundary"="administrative"]["admin_level"="{level}"];out geom;')
 
 
 def rings(ways):
@@ -37,11 +44,13 @@ def rings(ways):
     return out
 
 
-def main(path):
+def main(city, level):
+    Q = query(cities.CITIES[city]["osm"], level, cities.CITIES[city].get("area_level"))
+    path = os.path.join(cities.DISTRICT_DIR, f"{city}.geojson")
     # curl instead of requests: macOS system Python's LibreSSL fails the TLS handshake with overpass-api.de
     for attempt in range(6):  # the public Overpass server is often overloaded
         res = subprocess.run(
-            ["curl", "-s", "-m", "120", "-A", "statking/0.1 (personal research)",
+            ["curl", "-s", "-m", "200", "-A", "statking/0.1 (personal research)",
              "--data-urlencode", "data=" + Q, "https://overpass-api.de/api/interpreter"],
             capture_output=True)
         if res.stdout[:1] == b"{":
@@ -56,10 +65,12 @@ def main(path):
         outer = [[(p["lon"], p["lat"]) for p in m["geometry"]]
                  for m in el["members"] if m["type"] == "way" and m["role"] == "outer"]
         polys = [[list(map(list, ring))] for ring in rings(outer)]
+        if not polys:
+            continue
         feats.append({"type": "Feature", "properties": {"name": el["tags"]["name"]},
                       "geometry": {"type": "MultiPolygon", "coordinates": polys}})
-        print(el["tags"]["name"], len(polys))
-    json.dump({"type": "FeatureCollection", "features": feats}, open(path, "w"), ensure_ascii=False)
+    json.dump({"type": "FeatureCollection", "features": feats}, open(path, "w"), ensure_ascii=False, separators=(",", ":"))
+    print(f"\n{city}: {len(feats)} districts -> {path}")
 
 
-main(sys.argv[1])
+main(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else str(cities.CITIES[sys.argv[1]].get("admin_level", 10)))

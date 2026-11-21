@@ -2,19 +2,21 @@ import argparse
 import os
 import time
 
-from . import correlate, db, geo, jobs, stats, steam_job
+from . import cities, correlate, db, geo, jobs, stats, steam_job
 from .sources import wg_gesucht
 
 DB_PATH = os.environ.get("STATKING_DB", "data/statking.db")
 
 
 def cmd_scrape(args):
+    """Scrape now: statking scrape [--city kiel] [categories...]"""
     conn = db.connect(DB_PATH)
-    for cat in args.categories:
-        print(f"scraping wg-gesucht Kiel [{cat}] ...")
-        items, complete = wg_gesucht.scrape(cat)
-        new, gone = db.save_run(conn, "wg-gesucht", cat, items, complete)
-        print(f"  {len(items)} listings, {new} new, {gone} gone, complete={complete}")
+    for city in args.city or cities.enabled():
+        for cat in args.categories or cities.CITIES[city]["categories"]:
+            print(f"scraping wg-gesucht {city} [{cat}] ...")
+            items, complete = wg_gesucht.scrape(city, cat)
+            new, gone = db.save_run(conn, "wg-gesucht", cat, items, complete, city)
+            print(f"  {len(items)} listings, {new} new, {gone} gone, complete={complete}")
 
 
 def cmd_geocode(args):
@@ -55,8 +57,8 @@ def cmd_corr(args):
 
 def cmd_report(args):
     conn = db.connect(DB_PATH)
-    for cat in args.categories:
-        stats.print_report(conn, cat)
+    for cat in args.categories or cities.CITIES[args.city]["categories"]:
+        stats.print_report(conn, cat, args.city)
 
 
 def cmd_export(args):
@@ -76,10 +78,14 @@ def main():
     co = sub.add_parser("corr", help="correlate two series: statking corr A B --lag 1")
     co.add_argument("a"); co.add_argument("b"); co.add_argument("--lag", type=int, default=0)
     co.set_defaults(fn=cmd_corr)
-    for name, fn in (("scrape", cmd_scrape), ("report", cmd_report)):
-        sp = sub.add_parser(name)
-        sp.add_argument("categories", nargs="*", default=cats, help=f"any of: {cats}")
-        sp.set_defaults(fn=fn)
+    sc = sub.add_parser("scrape")
+    sc.add_argument("--city", action="append", choices=list(cities.CITIES), help="repeatable; default: RENT_CITIES / all")
+    sc.add_argument("categories", nargs="*", choices=cats)
+    sc.set_defaults(fn=cmd_scrape)
+    rp = sub.add_parser("report")
+    rp.add_argument("--city", default="kiel", choices=list(cities.CITIES))
+    rp.add_argument("categories", nargs="*", choices=cats)
+    rp.set_defaults(fn=cmd_report)
     sub.add_parser("steam-scrape").set_defaults(fn=cmd_steam_scrape)
     sub.add_parser("steam-report").set_defaults(fn=cmd_steam_report)
     sub.add_parser("geocode").set_defaults(fn=cmd_geocode)

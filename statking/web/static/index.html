@@ -98,7 +98,7 @@ td.n,th.n{text-align:right}
 <header>
   <div class="logo">stat<b>king</b></div>
   <nav>
-    <button data-v="rent" class="on">Kiel Mieten</button>
+    <button data-v="rent" class="on">Mieten</button>
     <button data-v="steam">Steam</button>
     <button data-v="explore">Explorer</button>
   </nav>
@@ -121,6 +121,7 @@ td.n,th.n{text-align:right}
     </div>
     <aside>
       <div class="ctrls">
+        <div class="row"><span>Stadt</span><select id="city" style="flex:1;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit"></select></div>
         <div class="seg" id="cat">
           <button data-c="wg" class="on">WG-Zimmer</button>
           <button data-c="1zi">1-Zimmer</button>
@@ -214,13 +215,38 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   maxZoom: 19, className: "dark-tiles"}).addTo(map);
 
-let geo = null, polyLayers = {}, pinLayer = L.layerGroup().addTo(map), state = {layer:"rent", layers:[], layerVals:{}, cat:"wg", data:null, maxp:2000, gone:false, pins:true};
+let geo = null, polyLayers = {}, pinLayer = L.layerGroup().addTo(map), state = {city:"kiel", cities:[], layer:"rent", layers:[], layerVals:{}, cat:"wg", data:null, maxp:2000, gone:false, pins:true};
 let scale = {lo:0, hi:1};
 
 map.on("movestart zoomstart", () => map.eachLayer(l => l.closeTooltip && l.closeTooltip()));
 map.getContainer().addEventListener("mouseleave", () => map.eachLayer(l => l.closeTooltip && l.closeTooltip()));
 
-fetch("/static/kiel_districts.geojson").then(r => r.json()).then(g => { geo = g; loadRent(); });
+const EMPTY = {type:"FeatureCollection", features:[]};
+async function initCities() {
+  state.cities = await (await fetch("/api/cities")).json();
+  const qp = new URLSearchParams(location.search);
+  if (state.cities.some(c => c.id === qp.get("city"))) state.city = qp.get("city");
+  $("#city").innerHTML = state.cities.map(c => `<option value="${esc(c.id)}">${esc(c.name)}${c.active ? " (" + c.active + ")" : ""}</option>`).join("");
+  $("#city").value = state.city;
+  await setCity(state.city, true);
+}
+async function setCity(id, first) {
+  const c = state.cities.find(x => x.id === id); if (!c) return;
+  state.city = id;
+  geo = c.has_districts ? await (await fetch(`/static/districts/${id}.geojson`)).json() : EMPTY;
+  // categories offered by this city
+  document.querySelectorAll("#cat button").forEach(b => { b.style.display = c.categories.includes(b.dataset.c) ? "" : "none"; });
+  if (!c.categories.includes(state.cat)) {
+    state.cat = c.categories[0];
+    document.querySelectorAll("#cat button").forEach(x => x.classList.toggle("on", x.dataset.c === state.cat));
+  }
+  // statistic layers only exist for Kiel
+  $("#layer").parentElement.style.display = c.has_layers ? "" : "none";
+  if (!c.has_layers && state.layer !== "rent") { state.layer = "rent"; state.layerVals = {}; $("#layer").value = "rent"; }
+  if (!first || true) map.setView([c.lat, c.lon], id === "kiel" ? 12 : 11);
+  await loadRent();
+}
+initCities();
 
 function jitter(seed){ // stable pseudo-random in [-1,1]
   let h = 0; for (const c of String(seed)) h = (h*31 + c.charCodeAt(0)) | 0;
@@ -228,7 +254,7 @@ function jitter(seed){ // stable pseudo-random in [-1,1]
 }
 
 async function loadRent() {
-  const d = await (await fetch(`/api/rent?category=${state.cat}&include_gone=${state.gone}`)).json();
+  const d = await (await fetch(`/api/rent?city=${state.city}&category=${state.cat}&include_gone=${state.gone}`)).json();
   state.data = d;
   $("#stamp").textContent = d.last_run ? "Stand: " + new Date(d.last_run).toLocaleString("de-DE") : "noch keine Daten";
   renderRent();
@@ -357,6 +383,7 @@ $("#layer").onchange = async e => {
   state.layerVals = state.layer === "rent" ? {} : (await (await fetch("/api/layer?id=" + state.layer)).json()).values;
   renderRent();
 };
+$("#city").onchange = e => setCity(e.target.value);
 document.querySelectorAll("#cat button").forEach(b => b.onclick = () => {
   document.querySelectorAll("#cat button").forEach(x => x.classList.toggle("on", x === b));
   state.cat = b.dataset.c;

@@ -4,28 +4,54 @@ import os
 import time
 from datetime import date, datetime, timedelta, timezone
 
-from . import db, geo, steam_job
+from . import cities, db, geo, steam_job
 from .sources import chess, opendata_sh, weather, wikipedia, wg_gesucht
 
 H = lambda name, default: float(os.environ.get(name, default))
 
 
 def job_rent(conn):
-    for cat in wg_gesucht.CATEGORIES:
-        items, complete = wg_gesucht.scrape(cat)
-        new, gone = db.save_run(conn, "wg-gesucht", cat, items, complete)
-        print(f"rent[{cat}]: {len(items)} listings, {new} new, {gone} gone, complete={complete}")
-    geo.geocode_missing(conn)
+    """Cities one after another with long pauses; a bot check aborts the whole job (next try after the interval)."""
+    first = True
+    for city in cities.enabled():
+        for cat in cities.CITIES[city]["categories"]:
+            if not first:
+                time.sleep(H("RENT_PAUSE_SECONDS", 45))
+            first = False
+            try:
+                items, complete = wg_gesucht.scrape(city, cat)
+            except wg_gesucht.Blocked as e:
+                print(f"rent: blocked ({e}); aborting this run, will retry next interval")
+                raise
+            new, gone = db.save_run(conn, "wg-gesucht", cat, items, complete, city)
+            print(f"rent[{city}/{cat}]: {len(items)} listings, {new} new, {gone} gone, complete={complete}")
+        geo.geocode_missing(conn)
 
 
 def job_steam(conn):
     steam_job.collect(conn)
 
 
+def station_for(conn, city):
+    """DWD station for a city: fixed override, cached lookup, or nearest station."""
+    if city in cities.WEATHER_STATION_OVERRIDE:
+        return cities.WEATHER_STATION_OVERRIDE[city]
+    row = conn.execute("SELECT value FROM kv WHERE key=?", (f"weather_station.{city}",)).fetchone()
+    if row:
+        return row[0]
+    c = cities.CITIES[city]
+    sid, name, dist = weather.nearest_station(c["lat"], c["lon"])
+    print(f"weather[{city}]: using {name} ({sid}), {dist / 1000:.0f} km away")
+    conn.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (f"weather_station.{city}", sid))
+    conn.commit()
+    return sid
+
+
 def job_weather(conn):
     backfill = os.environ.get("WEATHER_BACKFILL_FROM", "2024-01-01")
     today = date.today()
-    for name, station in weather.STATIONS.items():
+    for name in cities.CITIES:
+        station = station_for(conn, name)
         last = conn.execute("SELECT MAX(ts) FROM metrics WHERE series=?", (f"weather.{name}.temp_mean",)).fetchone()[0]
         start = date.fromisoformat(last) - timedelta(days=1) if last else date.fromisoformat(backfill)
         rows = []

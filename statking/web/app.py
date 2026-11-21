@@ -8,11 +8,10 @@ from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .. import correlate, db, geo, steam_job
+from .. import cities, correlate, db, geo, steam_job
 
 DB_PATH = os.environ.get("STATKING_DB", "data/statking.db")
 STATIC = os.path.join(os.path.dirname(__file__), "static")
-POLYGONS = [f["properties"]["name"] for f in json.load(open(os.path.join(STATIC, "kiel_districts.geojson")))["features"]]
 
 app = FastAPI(title="statking")
 
@@ -27,14 +26,15 @@ def index():
 
 
 @app.get("/api/rent")
-def rent(category: str = "wg", include_gone: bool = False):
+def rent(category: str = "wg", include_gone: bool = False, city: str = "kiel"):
     conn = db.connect(DB_PATH)
-    q = "SELECT * FROM listings WHERE category=? AND price_eur>0 AND size_m2>0"
+    polygons = cities.district_names(city)
+    q = "SELECT * FROM listings WHERE category=? AND city=? AND price_eur>0 AND size_m2>0"
     if not include_gone:
         q += " AND gone_at IS NULL"
     listings, by = [], {}
-    for r in conn.execute(q, (category,)):
-        poly = geo.polygon_name(r["district"], POLYGONS)
+    for r in conn.execute(q, (category, city)):
+        poly = geo.polygon_name(r["district"], polygons, city)
         eur_m2 = r["price_eur"] / r["size_m2"]
         life = _days(r["first_seen"], r["gone_at"] or db.now())
         listings.append({
@@ -51,8 +51,8 @@ def rent(category: str = "wg", include_gone: bool = False):
         for name, ls in by.items()
     }
     gone = [_days(r["first_seen"], r["gone_at"]) for r in conn.execute(
-        "SELECT first_seen, gone_at FROM listings WHERE category=? AND gone_at IS NOT NULL", (category,))]
-    last_run = conn.execute("SELECT MAX(ts) FROM runs WHERE category=?", (category,)).fetchone()[0]
+        "SELECT first_seen, gone_at FROM listings WHERE category=? AND city=? AND gone_at IS NOT NULL", (category, city))]
+    last_run = conn.execute("SELECT MAX(ts) FROM runs WHERE category=? AND city=?", (category, city)).fetchone()[0]
     return {"listings": listings, "districts": districts, "last_run": last_run,
             "median_lifetime_days": round(statistics.median(gone), 1) if gone else None, "vanished": len(gone)}
 
@@ -74,8 +74,17 @@ def steam():
     return {"online": online, "top": top, "in_game_lower_bound": in_game, "snapshot": last}
 
 
-GROUPS = {"rent": "Kiel Mieten", "weather": "Wetter (DWD)", "wiki": "Wikipedia", "steam": "Steam",
+GROUPS = {"rent": "Mieten", "weather": "Wetter (DWD)", "wiki": "Wikipedia", "steam": "Steam",
           "chess": "Chess.com", "stat": "Statistik Nord/SH"}
+
+
+@app.get("/api/cities")
+def cities_list():
+    conn = db.connect(DB_PATH)
+    counts = {r[0]: r[1] for r in conn.execute("SELECT city, COUNT(*) FROM listings WHERE gone_at IS NULL GROUP BY city")}
+    return [{"id": k, "name": c["name"], "lat": c["lat"], "lon": c["lon"], "categories": list(c["categories"]),
+             "active": counts.get(k, 0), "has_districts": bool(cities.district_names(k)), "has_layers": k == "kiel"}
+            for k, c in cities.CITIES.items()]
 
 
 @app.get("/api/series")
@@ -144,7 +153,7 @@ def layer(id: str, year: Optional[str] = None):
         for r in conn.execute(
                 "SELECT district, value FROM district_metrics WHERE dataset=? AND merkmal=? AND substr(ts,1,4)=?",
                 (id, first[0], year)):
-            poly = geo.polygon_name(r["district"], POLYGONS)
+            poly = geo.polygon_name(r["district"], cities.district_names("kiel"), "kiel")
             if poly:
                 values[poly] = r["value"]
     return {"id": id, "year": year, "values": values}

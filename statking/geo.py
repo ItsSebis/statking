@@ -4,6 +4,7 @@ import time
 
 import requests
 
+from . import cities
 from .db import now
 
 UA = "statking/0.1 (personal research)"
@@ -18,33 +19,42 @@ ALIASES = {
 }
 
 
-def polygon_name(district, known):
-    """Map a WG-Gesucht district string to an OSM polygon name (or None)."""
+def _norm(x):
+    return re.sub(r"[\s\-/]+", " ", x.lower()).strip()
+
+
+def polygon_name(district, known, city="kiel"):
+    """Map a WG-Gesucht district string to an OSM polygon name (or None).
+    Kiel has hand-made aliases; other cities rely on (normalised) exact matches."""
     if not district:
         return None
     d = district.strip().lower()
-    if d in ALIASES:
-        return ALIASES[d]
-    if d.startswith("elmschenhagen"):
-        return "Elmschenhagen"
+    if city == "kiel":
+        if d in ALIASES:
+            return ALIASES[d]
+        if d.startswith("elmschenhagen"):
+            return "Elmschenhagen"
     for k in known:
-        if k.lower() == d:
+        if k.lower() == d or _norm(k) == _norm(district):
             return k
     return None
 
 
-def _query_for(street):
+def _query_for(street, city_name):
     street = re.sub(r"\s+", " ", street.strip())
-    return f"{street}, Kiel"
+    return f"{street}, {city_name}"
 
 
 def geocode_missing(conn, limit=500):
     rows = conn.execute(
-        "SELECT source, id, street FROM listings WHERE lat IS NULL AND street IS NOT NULL AND street!='' LIMIT ?",
+        "SELECT source, id, street, city FROM listings WHERE lat IS NULL AND street IS NOT NULL AND street!='' AND gone_at IS NULL LIMIT ?",
         (limit,)).fetchall()
     done = 0
     for r in rows:
-        q = _query_for(r["street"])
+        c = cities.CITIES.get(r["city"])
+        if c is None:
+            continue
+        q = _query_for(r["street"], c["name"])
         hit = conn.execute("SELECT lat, lon FROM geocache WHERE query=?", (q,)).fetchone()
         if hit is None:
             try:
@@ -63,8 +73,9 @@ def geocode_missing(conn, limit=500):
         else:
             lat, lon = hit["lat"], hit["lon"]
         if lat is not None:
-            # sanity: must lie roughly inside Kiel
-            if 54.2 < lat < 54.45 and 10.0 < lon < 10.3:
+            # sanity: must lie near the city centre
+            la0, la1, lo0, lo1 = cities.bounds(r["city"])
+            if la0 < lat < la1 and lo0 < lon < lo1:
                 conn.execute("UPDATE listings SET lat=?, lon=? WHERE source=? AND id=?", (lat, lon, r["source"], r["id"]))
                 done += 1
         conn.commit()
