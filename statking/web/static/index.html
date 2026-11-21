@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>statking</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root{
+  --bg:#0d1117; --panel:#151b24; --panel2:#1c2430; --line:#2a3342;
+  --ink:#e8edf4; --ink2:#a6b1c2; --muted:#6f7b8e; --accent:#3fd0c9;
+  --r:12px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+  font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;align-items:center;gap:20px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
+.logo{font-weight:700;letter-spacing:.04em;font-size:16px}
+.logo b{color:var(--accent)}
+nav{display:flex;gap:4px}
+nav button,.seg button{background:none;border:0;color:var(--ink2);padding:6px 14px;border-radius:8px;cursor:pointer;font:inherit}
+nav button.on,.seg button.on{background:var(--panel2);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
+nav button:hover,.seg button:hover{color:var(--ink)}
+.spacer{flex:1}
+.stamp{color:var(--muted);font-size:12px}
+main{height:calc(100% - 55px)}
+.view{display:none;height:100%}
+.view.on{display:grid}
+#rent{grid-template-columns:1fr 360px}
+#mapwrap{position:relative;min-height:0}
+#map{position:absolute;inset:0;background:#0b0f15}
+.leaflet-container{font:inherit}
+.dark-tiles{filter:invert(1) hue-rotate(180deg) brightness(.82) contrast(.9) saturate(.35)}
+aside{overflow:auto;padding:16px;border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;gap:16px}
+.ctrls{display:flex;flex-direction:column;gap:10px}
+.seg{display:flex;gap:2px;background:var(--bg);padding:3px;border-radius:10px;border:1px solid var(--line)}
+.seg button{flex:1;padding:5px 8px}
+.row{display:flex;align-items:center;gap:10px;color:var(--ink2);font-size:13px}
+.row input[type=range]{flex:1;accent-color:var(--accent)}
+.row label{display:flex;align-items:center;gap:6px;cursor:pointer}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.tile{background:var(--panel2);border-radius:var(--r);padding:10px 12px;border:1px solid var(--line)}
+.tile .v{font-size:22px;font-weight:650}
+.tile .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+.rank{display:flex;flex-direction:column;gap:2px}
+.rk{display:grid;grid-template-columns:130px 1fr 52px;gap:8px;align-items:center;padding:4px 6px;border-radius:6px;cursor:pointer;font-size:13px}
+.rk:hover,.rk.hl{background:var(--panel2)}
+.rk .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
+.rk .nm small{color:var(--muted)}
+.rk .bar{height:8px;border-radius:0 4px 4px 0;background:var(--bg)}
+.rk .bar i{display:block;height:100%;border-radius:0 4px 4px 0}
+.rk .val{text-align:right;color:var(--ink2);font-variant-numeric:tabular-nums}
+.legend{position:absolute;left:16px;bottom:24px;z-index:500;background:rgba(21,27,36,.92);border:1px solid var(--line);
+  border-radius:var(--r);padding:10px 14px;backdrop-filter:blur(6px);min-width:240px}
+.legend .grad{height:10px;border-radius:5px;margin:6px 0 4px}
+.legend .ends{display:flex;justify-content:space-between;color:var(--ink2);font-size:12px;font-variant-numeric:tabular-nums}
+.legend .keys{display:flex;gap:14px;margin-top:8px;color:var(--ink2);font-size:12px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:-1px;margin-right:4px}
+.leaflet-tooltip.tt{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:8px 10px;box-shadow:0 6px 20px rgba(0,0,0,.4)}
+.leaflet-tooltip.tt:before{display:none}
+.tt b{font-size:14px} .tt div{color:var(--ink2);font-size:12px}
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--panel);color:var(--ink);border:1px solid var(--line)}
+.leaflet-popup-content{margin:12px 14px}
+.pop h4{margin:0 0 4px;font-size:14px} .pop .big{font-size:20px;font-weight:700}
+.pop a{color:var(--accent)} .pop .sub{color:var(--ink2);font-size:12px}
+.leaflet-control-attribution{background:rgba(13,17,23,.7)!important;color:var(--muted)!important}
+.leaflet-control-attribution a{color:var(--ink2)!important}
+.leaflet-control-zoom a{background:var(--panel)!important;color:var(--ink)!important;border-color:var(--line)!important}
+/* steam */
+#steam{padding:20px;overflow:auto;grid-template-columns:1fr 1fr;gap:16px;align-content:start}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+.card.wide{grid-column:1/-1}
+.chartbox{position:relative;height:300px}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+td,th{padding:6px 8px;text-align:left;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:600;font-size:12px}
+td.n,th.n{text-align:right}
+.empty{color:var(--muted);padding:20px}
+@media (max-width:900px){
+  #rent{grid-template-columns:1fr;grid-template-rows:55vh auto}
+  aside{border-left:0;border-top:1px solid var(--line)}
+  #steam{grid-template-columns:1fr}
+  .rk{grid-template-columns:110px 1fr 48px}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">stat<b>king</b></div>
+  <nav>
+    <button data-v="rent" class="on">Kiel Mieten</button>
+    <button data-v="steam">Steam</button>
+  </nav>
+  <div class="spacer"></div>
+  <div class="stamp" id="stamp"></div>
+</header>
+<main>
+  <section id="rent" class="view on">
+    <div id="mapwrap">
+      <div id="map"></div>
+      <div class="legend">
+        <div style="font-size:12px;color:var(--muted)">Median Miete pro m²</div>
+        <div class="grad" id="grad"></div>
+        <div class="ends"><span id="lo"></span><span id="hi"></span></div>
+        <div class="keys">
+          <span><span class="dot" style="background:var(--accent)"></span>genaue Adresse</span>
+          <span><span class="dot" style="border:2px solid var(--accent)"></span>nur Stadtteil</span>
+        </div>
+      </div>
+    </div>
+    <aside>
+      <div class="ctrls">
+        <div class="seg" id="cat">
+          <button data-c="wg" class="on">WG-Zimmer</button>
+          <button data-c="1zi">1-Zimmer</button>
+          <button data-c="wohnung">Wohnung</button>
+        </div>
+        <div class="row"><span>max €</span><input type="range" id="maxp" min="200" max="2000" step="50" value="2000"><span id="maxpv" style="width:48px;text-align:right">alle</span></div>
+        <div class="row">
+          <label><input type="checkbox" id="pins" checked> Pins</label>
+          <label><input type="checkbox" id="gone"> inkl. vergebene</label>
+        </div>
+      </div>
+      <div class="tiles">
+        <div class="tile"><div class="v" id="t-n">–</div><div class="l">Angebote</div></div>
+        <div class="tile"><div class="v" id="t-m2">–</div><div class="l">€/m² Median</div></div>
+        <div class="tile"><div class="v" id="t-life">–</div><div class="l">Tage online</div></div>
+      </div>
+      <div>
+        <h3>Stadtteile nach €/m²</h3>
+        <div class="rank" id="rank"></div>
+      </div>
+    </aside>
+  </section>
+
+  <section id="steam" class="view">
+    <div class="tiles card wide" style="grid-template-columns:repeat(3,1fr);border:0;background:none;padding:0">
+      <div class="tile"><div class="v" id="s-online">–</div><div class="l">Steam eingeloggt</div></div>
+      <div class="tile"><div class="v" id="s-game">–</div><div class="l">im Spiel (Top-100, Untergrenze)</div></div>
+      <div class="tile"><div class="v" id="s-ratio">–</div><div class="l">Anteil im Spiel</div></div>
+    </div>
+    <div class="card wide"><h3>Eingeloggte Nutzer (letzte ~48 h)</h3><div class="chartbox"><canvas id="c-online"></canvas></div></div>
+    <div class="card wide"><h3>Top-Spiele jetzt</h3><table id="top"></table></div>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = n => n == null ? "–" : Number(n).toLocaleString("de-DE");
+
+// single-hue sequential ramp (teal), dim -> bright on the dark surface
+const RAMP = ["#16343a","#1b4a52","#1f6168","#23787f","#2a9097","#34aeb0","#4cd0c8","#8ff0e0"];
+function hex2rgb(h){return [1,3,5].map(i=>parseInt(h.slice(i,i+2),16))}
+function ramp(t){
+  t = Math.max(0, Math.min(1, t));
+  const x = t*(RAMP.length-1), i = Math.floor(x), f = x-i;
+  const a = hex2rgb(RAMP[i]), b = hex2rgb(RAMP[Math.min(i+1,RAMP.length-1)]);
+  return "rgb("+a.map((v,k)=>Math.round(v+(b[k]-v)*f)).join(",")+")";
+}
+$("#grad").style.background = "linear-gradient(90deg,"+RAMP.join(",")+")";
+
+// ---------- tabs ----------
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === b.dataset.v));
+  if (b.dataset.v === "rent") setTimeout(() => map.invalidateSize(), 50);
+  if (b.dataset.v === "steam") loadSteam();
+});
+
+// ---------- map ----------
+const map = L.map("map", {zoomControl:true, preferCanvas:false}).setView([54.3233, 10.1394], 12);
+// keyless OSM tiles (fine for personal low-traffic use), darkened via CSS filter below
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maxZoom: 19, className: "dark-tiles"}).addTo(map);
+
+let geo = null, polyLayers = {}, pinLayer = L.layerGroup().addTo(map), state = {cat:"wg", data:null, maxp:2000, gone:false, pins:true};
+let scale = {lo:0, hi:1};
+
+map.on("movestart zoomstart", () => map.eachLayer(l => l.closeTooltip && l.closeTooltip()));
+map.getContainer().addEventListener("mouseleave", () => map.eachLayer(l => l.closeTooltip && l.closeTooltip()));
+
+fetch("/static/kiel_districts.geojson").then(r => r.json()).then(g => { geo = g; loadRent(); });
+
+function jitter(seed){ // stable pseudo-random in [-1,1]
+  let h = 0; for (const c of String(seed)) h = (h*31 + c.charCodeAt(0)) | 0;
+  return ((Math.abs(h) % 2000) / 1000) - 1;
+}
+
+async function loadRent() {
+  const d = await (await fetch(`/api/rent?category=${state.cat}&include_gone=${state.gone}`)).json();
+  state.data = d;
+  $("#stamp").textContent = d.last_run ? "Stand: " + new Date(d.last_run).toLocaleString("de-DE") : "noch keine Daten";
+  renderRent();
+}
+
+function filtered() { return state.data.listings.filter(l => l.price <= state.maxp); }
+
+function renderRent() {
+  if (!geo || !state.data) return;
+  const ls = filtered();
+  // recompute district stats on the filtered set
+  const by = {};
+  ls.forEach(l => { if (l.polygon) (by[l.polygon] ||= []).push(l); });
+  const med = a => { const s = [...a].sort((x,y)=>x-y), m = s.length>>1; return s.length%2 ? s[m] : (s[m-1]+s[m])/2; };
+  const dist = {};
+  Object.entries(by).forEach(([k,v]) => dist[k] = {n:v.length, eur_m2:med(v.map(l=>l.eur_m2)), price:med(v.map(l=>l.price))});
+  const vals = Object.values(dist).map(d => d.eur_m2).sort((a,b)=>a-b);
+  scale = vals.length ? {lo: vals[Math.floor(vals.length*0.05)], hi: vals[Math.ceil(vals.length*0.95)-1]} : {lo:0,hi:1};
+  if (scale.hi <= scale.lo) scale.hi = scale.lo + 1;
+  const col = v => ramp((v - scale.lo) / (scale.hi - scale.lo));
+  $("#lo").textContent = "≤ " + scale.lo.toFixed(0) + " €"; $("#hi").textContent = "≥ " + scale.hi.toFixed(0) + " €";
+
+  // polygons
+  Object.values(polyLayers).forEach(l => map.removeLayer(l)); polyLayers = {};
+  geo.features.forEach(f => {
+    const name = f.properties.name, d = dist[name];
+    const layer = L.geoJSON(f, {style: {
+      color: "#0d1117", weight: 1.5, fillColor: d ? col(d.eur_m2) : "#1a212c",
+      fillOpacity: d ? (d.n < 2 ? 0.45 : 0.75) : 0.35}}).addTo(map);
+    layer.bindTooltip(
+      `<div class="tt"><b>${esc(name)}</b>` + (d
+        ? `<div>${d.eur_m2.toFixed(1)} €/m² · Ø ${Math.round(d.price)} € · ${d.n} Angebot${d.n>1?"e":""}${d.n<2?" (wenig Daten)":""}</div>`
+        : `<div>keine Angebote</div>`) + `</div>`, {sticky:true, className:"tt", opacity:1});
+    // no bringToFront() here: re-inserting the SVG node under the cursor swallows mouseout and leaves tooltips stuck
+    layer.on("mouseover", () => { layer.setStyle({weight:3, color:"#e8edf4"}); hlRank(name, true); });
+    layer.on("mouseout", () => { layer.setStyle({weight:1.5, color:"#0d1117"}); layer.closeTooltip(); hlRank(name, false); });
+    layer.on("click", () => map.fitBounds(layer.getBounds(), {maxZoom:14}));
+    polyLayers[name] = layer;
+  });
+
+  // pins
+  pinLayer.clearLayers();
+  if (state.pins) {
+    ls.forEach(l => {
+      let lat = l.lat, lon = l.lon, exact = lat != null;
+      if (!exact) {
+        const pl = l.polygon && polyLayers[l.polygon]; if (!pl) return;
+        const b = pl.getBounds(), c = b.getCenter();
+        lat = c.lat + jitter(l.id+"a") * (b.getNorth()-b.getSouth()) * 0.18;
+        lon = c.lng + jitter(l.id+"b") * (b.getEast()-b.getWest()) * 0.18;
+      }
+      const c = col(l.eur_m2);
+      const m = L.circleMarker([lat, lon], {
+        radius: 7, weight: exact ? 2 : 2, color: exact ? "#0d1117" : c,
+        fillColor: c, fillOpacity: exact ? 1 : 0.15, opacity: 1});
+      m.bindPopup(`<div class="pop"><h4>${esc(l.title)}</h4>
+        <div class="big">${l.price} € <span class="sub">· ${l.size} m² · ${l.eur_m2.toFixed(1)} €/m²</span></div>
+        <div class="sub">${esc(l.flat_desc)} · ${esc(l.district||"")}${l.street?" · "+esc(l.street):""}${exact?"":" (Position ungefähr)"}</div>
+        <div class="sub">${l.available_from?"frei ab "+esc(l.available_from)+" · ":""}${l.days_listed.toFixed(0)} Tage online${l.gone?" · vergeben":""}</div>
+        <div style="margin-top:6px"><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">Anzeige öffnen ↗</a></div></div>`);
+      m.addTo(pinLayer);
+    });
+  }
+
+  // tiles
+  $("#t-n").textContent = ls.length;
+  $("#t-m2").textContent = ls.length ? med(ls.map(l=>l.eur_m2)).toFixed(1) : "–";
+  $("#t-life").textContent = state.data.median_lifetime_days != null ? state.data.median_lifetime_days : "–";
+  $("#t-life").title = state.data.vanished + " vergebene Angebote beobachtet";
+
+  // ranking
+  const rows = Object.entries(dist).sort((a,b)=>b[1].eur_m2-a[1].eur_m2);
+  const max = rows.length ? rows[0][1].eur_m2 : 1;
+  $("#rank").innerHTML = rows.map(([n,d]) =>
+    `<div class="rk" data-n="${esc(n)}"><span class="nm">${esc(n)} <small>${d.n}</small></span>
+     <span class="bar"><i style="width:${(d.eur_m2/max*100).toFixed(0)}%;background:${col(d.eur_m2)}"></i></span>
+     <span class="val">${d.eur_m2.toFixed(1)}</span></div>`).join("") || '<div class="empty">keine Daten</div>';
+  document.querySelectorAll(".rk").forEach(el => {
+    el.onclick = () => { const l = polyLayers[el.dataset.n]; if (l) map.fitBounds(l.getBounds(), {maxZoom:14}); };
+    el.onmouseenter = () => { const l = polyLayers[el.dataset.n]; if (l) l.setStyle({weight:3,color:"#e8edf4"}); };
+    el.onmouseleave = () => { const l = polyLayers[el.dataset.n]; if (l) l.setStyle({weight:1.5,color:"#0d1117"}); };
+  });
+}
+function hlRank(name, on) {
+  document.querySelectorAll(".rk").forEach(el => el.classList.toggle("hl", on && el.dataset.n === name));
+}
+
+document.querySelectorAll("#cat button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#cat button").forEach(x => x.classList.toggle("on", x === b));
+  state.cat = b.dataset.c;
+  const max = state.cat === "wg" ? 2000 : 3000;
+  $("#maxp").max = max; $("#maxp").value = max; state.maxp = max; $("#maxpv").textContent = "alle";
+  loadRent();
+});
+$("#maxp").oninput = e => { state.maxp = +e.target.value; $("#maxpv").textContent = state.maxp >= +e.target.max ? "alle" : state.maxp + " €"; renderRent(); };
+$("#pins").onchange = e => { state.pins = e.target.checked; renderRent(); };
+$("#gone").onchange = e => { state.gone = e.target.checked; loadRent(); };
+
+// ---------- steam ----------
+let steamChart = null, steamLoaded = false;
+async function loadSteam() {
+  if (steamLoaded) return;
+  const d = await (await fetch("/api/steam")).json();
+  if (!d.online.length) { $("#top").innerHTML = '<tr><td class="empty">noch keine Steam-Daten (statking steam-scrape)</td></tr>'; return; }
+  steamLoaded = true;
+  const last = d.online[d.online.length-1].v;
+  $("#s-online").textContent = fmt(last);
+  $("#s-game").textContent = fmt(d.in_game_lower_bound);
+  $("#s-ratio").textContent = d.in_game_lower_bound ? Math.round(d.in_game_lower_bound/last*100) + " %" : "–";
+  const pts = d.online.map(p => ({x: p.t*1000, y: p.v}));
+  steamChart = new Chart($("#c-online"), {
+    type: "line",
+    data: {datasets: [{data: pts, borderColor: "#3fd0c9", backgroundColor: "rgba(63,208,201,.12)", fill: true, borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, pointHoverBackgroundColor: "#3fd0c9", pointHoverBorderColor: "#0d1117", pointHoverBorderWidth: 2, tension: .25}]},
+    options: {maintainAspectRatio: false, parsing: false, animation: false,
+      interaction: {mode: "nearest", axis: "x", intersect: false},
+      plugins: {legend: {display: false}, tooltip: {backgroundColor: "#151b24", borderColor: "#2a3342", borderWidth: 1, titleColor: "#e8edf4", bodyColor: "#a6b1c2", padding: 10,
+        callbacks: {title: i => new Date(i[0].parsed.x).toLocaleString("de-DE"), label: c => fmt(c.parsed.y) + " eingeloggt"}}},
+      scales: {
+        x: {type: "linear", ticks: {color: "#6f7b8e", maxTicksLimit: 8, callback: v => new Date(v).toLocaleString("de-DE", {weekday:"short", hour:"2-digit", minute:"2-digit"})}, grid: {color: "#1c2430"}, border: {display: false}},
+        y: {ticks: {color: "#6f7b8e", callback: v => (v/1e6).toFixed(0) + " Mio"}, grid: {color: "#1c2430"}, border: {display: false}}}}
+  });
+  const max = Math.max(...d.top.map(t => t.concurrent), 1);
+  $("#top").innerHTML = '<tr><th>#</th><th>Spiel</th><th></th><th class="n">jetzt</th><th class="n">Peak heute</th></tr>' +
+    d.top.map(t => `<tr><td>${t.rank}</td><td>${esc(t.name)}</td>
+      <td style="width:30%"><div style="height:8px;border-radius:0 4px 4px 0;background:#3fd0c9;width:${(t.concurrent/max*100).toFixed(1)}%"></div></td>
+      <td class="n">${fmt(t.concurrent)}</td><td class="n">${fmt(t.peak)}</td></tr>`).join("");
+}
+</script>
+</body>
+</html>

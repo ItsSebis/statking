@@ -1,0 +1,38 @@
+# Dev: `docker compose watch` (build + start + live-sync on file changes)
+# Prod: `docker compose up -d` (develop.watch is ignored)
+x-watch: &watch
+  - action: sync            # frontend files are read from disk per request: no restart needed
+    path: ./statking/web/static
+    target: /app/statking/web/static
+  - action: sync+restart    # python code: copy, then restart the container
+    path: ./statking
+    target: /app/statking
+    ignore:
+      - web/static/
+      - __pycache__/
+      - "*.pyc"
+  - action: rebuild         # dependencies / image definition changed
+    path: ./requirements.txt
+  - action: rebuild
+    path: ./Dockerfile
+
+services:
+  collector:
+    build: .
+    restart: unless-stopped
+    environment:
+      SCRAPE_INTERVAL_HOURS: 24
+    volumes:
+      - ./data:/data
+    develop:
+      watch: *watch
+  web:
+    build: .
+    command: ["python", "-m", "statking", "serve"]
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    develop:
+      watch: *watch
