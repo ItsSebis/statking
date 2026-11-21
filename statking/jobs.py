@@ -5,7 +5,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 
 from . import db, geo, steam_job
-from .sources import chess, weather, wikipedia, wg_gesucht
+from .sources import chess, opendata_sh, weather, wikipedia, wg_gesucht
 
 H = lambda name, default: float(os.environ.get(name, default))
 
@@ -79,6 +79,29 @@ def job_chess(conn):
     print(f"chess[{user}]: {n} games read")
 
 
+def job_stat(conn):
+    n = 0
+    for key, (cid, layout) in opendata_sh.DATASETS.items():
+        try:
+            pts = opendata_sh.parse(opendata_sh.fetch_csv(cid), layout)
+        except Exception as e:  # one broken dataset must not block the rest
+            print(f"stat[{key}] failed: {e!r}")
+            continue
+        db.put_metrics(conn, [(f"stat.{key}.{opendata_sh.slug(col)}", ts, v) for col, ts, v in pts])
+        n += len(pts)
+    for key, (cid, _label, _unit) in opendata_sh.DISTRICT_DATASETS.items():
+        try:
+            pts = opendata_sh.parse_district(opendata_sh.fetch_csv(cid))
+        except Exception as e:
+            print(f"stat[{key}] failed: {e!r}")
+            continue
+        conn.executemany("INSERT OR REPLACE INTO district_metrics VALUES (?,?,?,?,?)",
+                         [(key, m, d, ts, v) for m, d, ts, v in pts])
+        n += len(pts)
+    conn.commit()
+    print(f"stat: {n} points")
+
+
 # name -> (function, default interval in hours, env var overriding it)
 JOBS = {
     "rent": (job_rent, 24, "RENT_INTERVAL_HOURS"),
@@ -86,6 +109,7 @@ JOBS = {
     "weather": (job_weather, 12, "WEATHER_INTERVAL_HOURS"),
     "wiki": (job_wiki, 24, "WIKI_INTERVAL_HOURS"),
     "chess": (job_chess, 6, "CHESS_INTERVAL_HOURS"),
+    "stat": (job_stat, 168, "STAT_INTERVAL_HOURS"),  # yearly data, weekly check is plenty
 }
 
 

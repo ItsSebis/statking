@@ -14,6 +14,7 @@ ALIASES = {
     "kronsburg": "Gaarden-Süd/Kronsburg",
     "dietrichsdorf": "Neumühlen-Dietrichsdorf",
     "neumühlen": "Neumühlen-Dietrichsdorf",
+    "neumühlen/dietrichsdorf": "Neumühlen-Dietrichsdorf",
 }
 
 

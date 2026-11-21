@@ -83,7 +83,8 @@ def series_list():
     conn = db.connect(DB_PATH)
     out = []
     for name, n, lo, hi in correlate.list_series(conn):
-        out.append({"name": name, "group": GROUPS.get(name.split(".")[0], "Sonstige"), "n": n, "from": lo, "to": hi})
+        out.append({"name": name, "group": GROUPS.get(name.split(".")[0], "Sonstige"), "n": n, "from": lo, "to": hi,
+                    "res": correlate.granularity(conn, name) if n >= 3 else "day"})
     return out
 
 
@@ -99,31 +100,54 @@ def series_data(name: List[str] = Query(...), start: Optional[str] = None, end: 
 
 
 @app.get("/api/corr")
-def corr(a: str, b: str, start: Optional[str] = None, end: Optional[str] = None, max_lag: int = 14):
-    """Pearson r at lag 0 plus a lag scan (positive lag = b follows a), plus aligned pairs for a scatter plot."""
+def corr(a: str, b: str, start: Optional[str] = None, end: Optional[str] = None, max_lag: Optional[int] = None, diff: bool = False):
+    """Pearson r at lag 0 plus a lag scan (positive lag = b follows a) and aligned pairs for a scatter plot.
+    Resolution (day/month/year) is the coarser of the two series; lag is in that unit."""
     conn = db.connect(DB_PATH)
-    da, dbb = correlate.daily(conn, a), correlate.daily(conn, b)
-    if start:
-        da = {d: v for d, v in da.items() if d >= start}
-    if end:
-        da = {d: v for d, v in da.items() if d <= end}
-    def aligned(lag):
-        xs, ys, ds = [], [], []
-        for d, v in sorted(da.items()):
-            d2 = (date.fromisoformat(d) + timedelta(days=lag)).isoformat()
-            if d2 in dbb:
-                xs.append(v); ys.append(dbb[d2]); ds.append(d)
-        return xs, ys, ds
+    res = correlate.common_resolution(conn, a, b)
+    if max_lag is None:
+        max_lag = {"day": 14, "month": 12, "year": 5}[res]
     scan = []
     for lag in range(-max_lag, max_lag + 1):
-        xs, ys, _ = aligned(lag)
+        xs, ys, _, _ = correlate.aligned(conn, a, b, lag, start, end, res, diff)
         r = correlate.pearson(xs, ys)
         scan.append({"lag": lag, "r": None if r is None else round(r, 4), "n": len(xs)})
-    xs, ys, ds = aligned(0)
+    xs, ys, ks, _ = correlate.aligned(conn, a, b, 0, start, end, res, diff)
     r0 = correlate.pearson(xs, ys)
     step = max(1, len(xs) // 600)  # cap scatter points
-    return {"r": None if r0 is None else round(r0, 4), "n": len(xs), "scan": scan,
-            "points": [{"x": round(x, 3), "y": round(y, 3), "d": d} for x, y, d in list(zip(xs, ys, ds))[::step]]}
+    return {"r": None if r0 is None else round(r0, 4), "n": len(xs), "unit": res, "scan": scan,
+            "points": [{"x": round(x, 3), "y": round(y, 3), "d": k} for x, y, k in list(zip(xs, ys, ks))[::step]]}
+
+
+@app.get("/api/layers")
+def layers():
+    """Per-Stadtteil statistics usable as map layers."""
+    from ..sources import opendata_sh
+    conn = db.connect(DB_PATH)
+    out = []
+    for key, (_cid, label, unit) in opendata_sh.DISTRICT_DATASETS.items():
+        row = conn.execute("SELECT MAX(substr(ts,1,4)) FROM district_metrics WHERE dataset=?", (key,)).fetchone()
+        if row and row[0]:
+            out.append({"id": key, "label": label, "unit": unit, "year": row[0]})
+    return out
+
+
+@app.get("/api/layer")
+def layer(id: str, year: Optional[str] = None):
+    """{polygon name: value} for the latest (or given) year. Only the first merkmal of a dataset is used."""
+    conn = db.connect(DB_PATH)
+    if not year:
+        year = conn.execute("SELECT MAX(substr(ts,1,4)) FROM district_metrics WHERE dataset=?", (id,)).fetchone()[0]
+    first = conn.execute("SELECT merkmal FROM district_metrics WHERE dataset=? ORDER BY merkmal LIMIT 1", (id,)).fetchone()
+    values = {}
+    if first:
+        for r in conn.execute(
+                "SELECT district, value FROM district_metrics WHERE dataset=? AND merkmal=? AND substr(ts,1,4)=?",
+                (id, first[0], year)):
+            poly = geo.polygon_name(r["district"], POLYGONS)
+            if poly:
+                values[poly] = r["value"]
+    return {"id": id, "year": year, "values": values}
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

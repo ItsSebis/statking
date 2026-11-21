@@ -49,8 +49,8 @@ def cmd_series(args):
 
 
 def cmd_corr(args):
-    r, n = correlate.correlate(db.connect(DB_PATH), args.a, args.b, args.lag)
-    print("not enough overlapping days" if r is None else f"r = {r:+.3f} over {n} days (lag {args.lag}d)")
+    r, n, res = correlate.correlate(db.connect(DB_PATH), args.a, args.b, args.lag)
+    print(f"not enough overlap at {res} resolution" if r is None else f"r = {r:+.3f} over {n} {res}s (lag {args.lag} {res}s)")
 
 
 def cmd_report(args):

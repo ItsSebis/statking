@@ -27,6 +27,7 @@ services:
       WEATHER_INTERVAL_HOURS: 12
       WIKI_INTERVAL_HOURS: 24
       CHESS_INTERVAL_HOURS: 6
+      STAT_INTERVAL_HOURS: 168
       WIKI_ARTICLES: "de:Weihnachtsmann,de:Trennung"
       CHESSCOM_USER: ${CHESSCOM_USER:-}   # set in .env to enable chess tracking
     volumes:

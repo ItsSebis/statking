@@ -48,6 +48,10 @@ CREATE TABLE IF NOT EXISTS metrics (
     PRIMARY KEY (series, ts)
 );
 CREATE TABLE IF NOT EXISTS job_runs (job TEXT PRIMARY KEY, ts TEXT NOT NULL, ok INTEGER NOT NULL, note TEXT);
+CREATE TABLE IF NOT EXISTS district_metrics (
+    dataset TEXT NOT NULL, merkmal TEXT NOT NULL, district TEXT NOT NULL, ts TEXT NOT NULL, value REAL,
+    PRIMARY KEY (dataset, merkmal, district, ts)
+);
 CREATE TABLE IF NOT EXISTS chess_games (
     url TEXT PRIMARY KEY, end_time TEXT NOT NULL, time_class TEXT, color TEXT,
     result TEXT, my_rating INTEGER, opp_rating INTEGER
