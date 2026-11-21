@@ -1,13 +1,14 @@
 import json
 import os
 import statistics
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from typing import List, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .. import db, geo, steam_job
+from .. import correlate, db, geo, steam_job
 
 DB_PATH = os.environ.get("STATKING_DB", "data/statking.db")
 STATIC = os.path.join(os.path.dirname(__file__), "static")
@@ -71,6 +72,58 @@ def steam():
     else:
         in_game = None
     return {"online": online, "top": top, "in_game_lower_bound": in_game, "snapshot": last}
+
+
+GROUPS = {"rent": "Kiel Mieten", "weather": "Wetter (DWD)", "wiki": "Wikipedia", "steam": "Steam",
+          "chess": "Chess.com", "stat": "Statistik Nord/SH"}
+
+
+@app.get("/api/series")
+def series_list():
+    conn = db.connect(DB_PATH)
+    out = []
+    for name, n, lo, hi in correlate.list_series(conn):
+        out.append({"name": name, "group": GROUPS.get(name.split(".")[0], "Sonstige"), "n": n, "from": lo, "to": hi})
+    return out
+
+
+@app.get("/api/series/data")
+def series_data(name: List[str] = Query(...), start: Optional[str] = None, end: Optional[str] = None):
+    """Daily means for each requested series."""
+    conn = db.connect(DB_PATH)
+    res = {}
+    for n in name[:4]:
+        res[n] = [{"d": d, "v": round(v, 4)} for d, v in sorted(correlate.daily(conn, n).items())
+                  if (not start or d >= start) and (not end or d <= end)]
+    return res
+
+
+@app.get("/api/corr")
+def corr(a: str, b: str, start: Optional[str] = None, end: Optional[str] = None, max_lag: int = 14):
+    """Pearson r at lag 0 plus a lag scan (positive lag = b follows a), plus aligned pairs for a scatter plot."""
+    conn = db.connect(DB_PATH)
+    da, dbb = correlate.daily(conn, a), correlate.daily(conn, b)
+    if start:
+        da = {d: v for d, v in da.items() if d >= start}
+    if end:
+        da = {d: v for d, v in da.items() if d <= end}
+    def aligned(lag):
+        xs, ys, ds = [], [], []
+        for d, v in sorted(da.items()):
+            d2 = (date.fromisoformat(d) + timedelta(days=lag)).isoformat()
+            if d2 in dbb:
+                xs.append(v); ys.append(dbb[d2]); ds.append(d)
+        return xs, ys, ds
+    scan = []
+    for lag in range(-max_lag, max_lag + 1):
+        xs, ys, _ = aligned(lag)
+        r = correlate.pearson(xs, ys)
+        scan.append({"lag": lag, "r": None if r is None else round(r, 4), "n": len(xs)})
+    xs, ys, ds = aligned(0)
+    r0 = correlate.pearson(xs, ys)
+    step = max(1, len(xs) // 600)  # cap scatter points
+    return {"r": None if r0 is None else round(r0, 4), "n": len(xs), "scan": scan,
+            "points": [{"x": round(x, 3), "y": round(y, 3), "d": d} for x, y, d in list(zip(xs, ys, ds))[::step]]}
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

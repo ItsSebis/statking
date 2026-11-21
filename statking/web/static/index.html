@@ -77,7 +77,16 @@ td,th{padding:6px 8px;text-align:left;border-bottom:1px solid var(--line)}
 th{color:var(--muted);font-weight:600;font-size:12px}
 td.n,th.n{text-align:right}
 .empty{color:var(--muted);padding:20px}
+/* explorer */
+#explore{padding:20px;overflow:auto;grid-template-columns:1fr 1fr;gap:16px;align-content:start}
+#explore .pick{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+#explore select{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:inherit;max-width:340px}
+#explore .key{display:inline-block;width:12px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
+.rbig{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums}
+.note{color:var(--muted);font-size:12px;margin-top:6px}
+.chartbox.s{height:200px}
 @media (max-width:900px){
+  #explore{grid-template-columns:1fr}
   #rent{grid-template-columns:1fr;grid-template-rows:55vh auto}
   aside{border-left:0;border-top:1px solid var(--line)}
   #steam{grid-template-columns:1fr}
@@ -91,6 +100,7 @@ td.n,th.n{text-align:right}
   <nav>
     <button data-v="rent" class="on">Kiel Mieten</button>
     <button data-v="steam">Steam</button>
+    <button data-v="explore">Explorer</button>
   </nav>
   <div class="spacer"></div>
   <div class="stamp" id="stamp"></div>
@@ -143,6 +153,25 @@ td.n,th.n{text-align:right}
     <div class="card wide"><h3>Eingeloggte Nutzer (letzte ~48 h)</h3><div class="chartbox"><canvas id="c-online"></canvas></div></div>
     <div class="card wide"><h3>Top-Spiele jetzt</h3><table id="top"></table></div>
   </section>
+  <section id="explore" class="view">
+    <div class="pick">
+      <span><span class="key" style="background:#3fd0c9"></span><select id="sa"></select></span>
+      <span><span class="key" style="background:#f2b84b"></span><select id="sb"></select></span>
+      <div class="seg" id="range" style="min-width:260px">
+        <button data-r="30">30 T</button><button data-r="90">90 T</button><button data-r="365" class="on">1 J</button><button data-r="0">alles</button>
+      </div>
+    </div>
+    <div class="card"><h3 id="ha">A</h3><div class="chartbox s"><canvas id="ca"></canvas></div></div>
+    <div class="card">
+      <h3>Zusammenhang</h3>
+      <div class="rbig" id="rbig">–</div>
+      <div id="rtxt" style="color:var(--ink2)"></div>
+      <div class="note">Korrelation ist keine Kausalität: Jahreszeit und Trends erzeugen leicht Scheinzusammenhänge.</div>
+    </div>
+    <div class="card"><h3 id="hb">B</h3><div class="chartbox s"><canvas id="cb"></canvas></div></div>
+    <div class="card"><h3>Streudiagramm (Tage)</h3><div class="chartbox s"><canvas id="cs"></canvas></div></div>
+    <div class="card wide"><h3>Verschiebung: r, wenn B um n Tage nach A kommt</h3><div class="chartbox s"><canvas id="cl"></canvas></div></div>
+  </section>
 </main>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -169,7 +198,11 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === b.dataset.v));
   if (b.dataset.v === "rent") setTimeout(() => map.invalidateSize(), 50);
   if (b.dataset.v === "steam") loadSteam();
+  if (b.dataset.v === "explore") initExplore();
 });
+
+// deep links: /#steam, /#explore
+addEventListener("load", () => { const b = document.querySelector(`nav button[data-v="${location.hash.slice(1)}"]`); if (b) b.click(); });
 
 // ---------- map ----------
 const map = L.map("map", {zoomControl:true, preferCanvas:false}).setView([54.3233, 10.1394], 12);
@@ -319,6 +352,77 @@ async function loadSteam() {
     d.top.map(t => `<tr><td>${t.rank}</td><td>${esc(t.name)}</td>
       <td style="width:30%"><div style="height:8px;border-radius:0 4px 4px 0;background:#3fd0c9;width:${(t.concurrent/max*100).toFixed(1)}%"></div></td>
       <td class="n">${fmt(t.concurrent)}</td><td class="n">${fmt(t.peak)}</td></tr>`).join("");
+}
+
+// ---------- explorer ----------
+const CA = "#3fd0c9", CB = "#f2b84b";
+let exInit = false, exCharts = {}, exRange = 365;
+const nice = n => n.replace(/^[a-z]+\./, "").replace(/\./g, " · ").replace(/_/g, " ");
+const gridCol = "#1c2430", tickCol = "#6f7b8e";
+const tooltipOpts = {backgroundColor:"#151b24", borderColor:"#2a3342", borderWidth:1, titleColor:"#e8edf4", bodyColor:"#a6b1c2", padding:10};
+
+async function initExplore() {
+  if (exInit) return;
+  exInit = true;
+  const list = await (await fetch("/api/series")).json();
+  const groups = {};
+  list.filter(x => x.n >= 2).forEach(x => (groups[x.group] ||= []).push(x));
+  const opts = Object.entries(groups).map(([g, xs]) =>
+    `<optgroup label="${esc(g)}">` + xs.map(x => `<option value="${esc(x.name)}">${esc(nice(x.name))} (${x.n})</option>`).join("") + `</optgroup>`).join("");
+  $("#sa").innerHTML = opts; $("#sb").innerHTML = opts;
+  const has = n => list.some(x => x.name === n && x.n >= 2);
+  $("#sa").value = has("weather.hamburg.temp_mean") ? "weather.hamburg.temp_mean" : $("#sa").options[0]?.value;
+  $("#sb").value = has("wiki.de.Weihnachtsmann") ? "wiki.de.Weihnachtsmann" : ($("#sb").options[1]?.value || $("#sb").options[0]?.value);
+  $("#sa").onchange = $("#sb").onchange = renderExplore;
+  document.querySelectorAll("#range button").forEach(b => b.onclick = () => {
+    document.querySelectorAll("#range button").forEach(x => x.classList.toggle("on", x === b));
+    exRange = +b.dataset.r; renderExplore();
+  });
+  renderExplore();
+}
+
+function mk(id, cfg) { if (exCharts[id]) exCharts[id].destroy(); exCharts[id] = new Chart($("#" + id), cfg); }
+const baseScales = (xt) => ({
+  x: Object.assign({grid:{color:gridCol}, border:{display:false}, ticks:{color:tickCol, maxTicksLimit:7}}, xt || {}),
+  y: {grid:{color:gridCol}, border:{display:false}, ticks:{color:tickCol}}});
+
+function lineChart(id, series, color) {
+  mk(id, {type:"line",
+    data:{datasets:[{data: series.map(p => ({x: new Date(p.d).getTime(), y: p.v})), borderColor: color, backgroundColor: color + "22", fill:true, borderWidth:2, pointRadius: series.length < 40 ? 3 : 0, pointHoverRadius:5, pointHoverBackgroundColor: color, pointHoverBorderColor:"#0d1117", pointHoverBorderWidth:2, tension:.2}]},
+    options:{maintainAspectRatio:false, parsing:false, animation:false, interaction:{mode:"nearest", axis:"x", intersect:false},
+      plugins:{legend:{display:false}, tooltip:Object.assign({callbacks:{title:i => new Date(i[0].parsed.x).toLocaleDateString("de-DE"), label:c => fmt(Math.round(c.parsed.y*100)/100)}}, tooltipOpts)},
+      scales: baseScales({type:"linear", min: series.length ? new Date(series[0].d).getTime() : undefined, max: series.length ? new Date(series[series.length-1].d).getTime() : undefined, ticks:{color:tickCol, maxTicksLimit:7, callback:v => new Date(v).toLocaleDateString("de-DE", {month:"short", year:"2-digit"})}})}});
+}
+
+function describe(r) {
+  if (r == null) return "zu wenig überlappende Tage";
+  const a = Math.abs(r), w = a < .1 ? "kein" : a < .3 ? "schwacher" : a < .5 ? "mäßiger" : a < .7 ? "deutlicher" : "starker";
+  return a < .1 ? "kein erkennbarer linearer Zusammenhang" : `${w} ${r > 0 ? "gleichläufiger" : "gegenläufiger"} Zusammenhang`;
+}
+
+async function renderExplore() {
+  const a = $("#sa").value, b = $("#sb").value; if (!a || !b) return;
+  const start = exRange ? new Date(Date.now() - exRange*864e5).toISOString().slice(0,10) : "";
+  const q = start ? `&start=${start}` : "";
+  const [data, c] = await Promise.all([
+    fetch(`/api/series/data?name=${encodeURIComponent(a)}&name=${encodeURIComponent(b)}${q}`).then(r => r.json()),
+    fetch(`/api/corr?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}${q}`).then(r => r.json())]);
+  $("#ha").textContent = nice(a); $("#hb").textContent = nice(b);
+  lineChart("ca", data[a] || [], CA); lineChart("cb", data[b] || [], CB);
+  $("#rbig").textContent = c.r == null ? "–" : (c.r > 0 ? "+" : "") + c.r.toFixed(2);
+  $("#rtxt").textContent = `${describe(c.r)} · ${c.n} gemeinsame Tage`;
+  mk("cs", {type:"scatter",
+    data:{datasets:[{data:c.points, borderColor:"#0d1117", borderWidth:1, backgroundColor:CA + "99", pointRadius:3.5, pointHoverRadius:6}]},
+    options:{maintainAspectRatio:false, animation:false,
+      plugins:{legend:{display:false}, tooltip:Object.assign({callbacks:{title:i => i[0].raw.d, label:c2 => `${nice(a)}: ${c2.raw.x} · ${nice(b)}: ${c2.raw.y}`}}, tooltipOpts)},
+      scales:{x:Object.assign(baseScales().x, {title:{display:true, text:nice(a), color:tickCol}}), y:Object.assign(baseScales().y, {title:{display:true, text:nice(b), color:tickCol}})}}});
+  const best = c.scan.reduce((m, p) => p.r != null && (m == null || Math.abs(p.r) > Math.abs(m.r)) ? p : m, null);
+  mk("cl", {type:"bar",
+    data:{labels:c.scan.map(p => p.lag), datasets:[{data:c.scan.map(p => p.r), borderRadius:3,
+      backgroundColor:c.scan.map(p => best && p.lag === best.lag ? CB : CA + "88")}]},
+    options:{maintainAspectRatio:false, animation:false,
+      plugins:{legend:{display:false}, tooltip:Object.assign({callbacks:{title:i => `Verschiebung ${i[0].label} Tage`, label:c2 => "r = " + (c2.raw == null ? "–" : c2.raw.toFixed(3))}}, tooltipOpts)},
+      scales:{x:Object.assign(baseScales().x, {title:{display:true, text:"Tage (B nach A)", color:tickCol}}), y:Object.assign(baseScales().y, {min:-1, max:1})}}});
 }
 </script>
 </body>
