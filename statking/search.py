@@ -5,7 +5,8 @@ params['lags'] (or -max_lag..max_lag); each (pair, Lag) is one Hypothesis. Serie
 for trend and seasonality (detrend/deseason where history allows, first differencing otherwise),
 Spearman with a block-bootstrap p-value (Pearson stored as a secondary number),
 Benjamini-Hochberg FDR correction over the whole Search.
-Later slices add Stability and Derived Pairs."""
+A Real candidate must also be Stable (same sign and significance on both halves and rolling windows).
+Later slices add Derived Pairs."""
 import json
 import math
 import random
@@ -17,6 +18,7 @@ from . import adjust, correlate, db
 DEFAULT_PARAMS = {
     "alpha": 0.01,         # false-discovery rate the Search controls (Benjamini-Hochberg)
     "min_buckets": 30,     # fewer aligned buckets than this -> Too Little Data
+    "stability_alpha": 0.05,  # p a half / rolling window must reach to count as "still significant"
     "lags": [0],           # Lags (in Resolution buckets, b read `lag` after a) tested for every pair
     "seed": 0,             # fixes the bootstrap resamples: same data + seed -> identical p-values
     "bootstrap_samples": 300,
@@ -105,6 +107,7 @@ def _judge(conn_cache, a, b, lag, params):
     out = {**out, "spearman": rho, "pearson": correlate.pearson(xs, ys), "p_value": p}
     if p is None:  # degenerate null (constant resamples): untestable, not "not significant"
         return {**out, "verdict": "too_little_data", "reason": "untestable"}
+    out["_xy"] = (xs, ys)
     return {**out, "verdict": "coincidence", "reason": _coincidence_reason(raw, ta, tb, res, lag, params)}
 
 
@@ -123,6 +126,34 @@ def _apply_fdr(results, alpha):
         r.setdefault("q_value", None)
         if r["q_value"] is not None and r["q_value"] <= alpha:
             r["verdict"], r["reason"] = "real", None
+
+
+def _windows(n):
+    """The two halves plus rolling windows of half the history, stepped by a quarter of it."""
+    w = n // 2
+    spans = {(0, w), (n - w, n)}
+    spans.update((s, s + w) for s in range(0, n - w + 1, max(1, n // 4)))
+    return sorted(spans)
+
+
+def _is_stable(xs, ys, rho, params, resamplers):
+    """True when every half and rolling window has the full-history sign and p <= stability_alpha."""
+    for lo, hi in _windows(len(xs)):
+        wx, wy = xs[lo:hi], ys[lo:hi]
+        r = spearman(wx, wy) if len(wx) >= 3 else None
+        if r is None or r * rho <= 0:
+            return False
+        p = _p_value(wx, wy, r, resamplers(len(wx)))
+        if p is None or p > params["stability_alpha"]:
+            return False
+    return True
+
+
+def _apply_stability(results, params, resamplers):
+    """Demote FDR-Real candidates whose relationship is not present throughout the history."""
+    for r in results:
+        if r["verdict"] == "real" and not _is_stable(*r["_xy"], r["spearman"], params, resamplers):
+            r["verdict"], r["reason"] = "coincidence", "unstable"
 
 
 def run_search(conn, params=None):
@@ -159,6 +190,7 @@ def run_search(conn, params=None):
     results = [_judge(cache, a, b, lag, params)
                for a, b in combinations(names, 2) for lag in params["lags"]]
     _apply_fdr(results, params["alpha"])
+    _apply_stability(results, params, resamplers)
     ts = db.now()
     cur = conn.execute("INSERT INTO snapshots (ts, params, hypotheses, real_count) VALUES (?,?,?,?)",
                        (ts, json.dumps(params), len(results), sum(r["verdict"] == "real" for r in results)))

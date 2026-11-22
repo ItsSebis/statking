@@ -216,3 +216,54 @@ def test_gappy_history_falls_back_to_differencing(conn, seed_series):
 
     assert r["adjustment"] == "differenced"
     assert r["verdict"] == "real"
+
+
+def _half_related(n=300, split=150, seed=1, flip=False):
+    """Changes shared in the first `split` days only; after that the two walks are independent
+    (or, with flip, driven by opposite-signed shocks)."""
+    rng = random.Random(seed)
+    a, b, xa, xb = [], [], 0.0, 0.0
+    for t in range(n):
+        s = rng.gauss(0, 1)
+        xa += s
+        if t < split:
+            xb += 0.95 * s + 0.05 * rng.gauss(0, 1)
+        else:
+            xb += (-0.95 * s + 0.05 * rng.gauss(0, 1)) if flip else rng.gauss(0, 1)
+        a.append(xa)
+        b.append(xb)
+    return a, b
+
+
+def test_relationship_present_in_only_one_half_fails_stability(conn, seed_series):
+    a, b = _half_related()
+    seed_series(test__a=a, test__b=b)
+
+    r = only(run_search(conn))
+
+    assert (r["verdict"], r["reason"]) == ("coincidence", "unstable")
+
+
+def test_relationship_with_flipped_sign_between_halves_fails_stability(conn, seed_series):
+    a, b = _half_related(split=200, flip=True)
+    seed_series(test__a=a, test__b=b)
+
+    r = only(run_search(conn))
+
+    assert (r["verdict"], r["reason"]) == ("coincidence", "unstable")
+
+
+def test_relationship_holding_throughout_is_stable_and_real(conn, seed_series):
+    a, b = related_walks(seed=3, n=300)
+    seed_series(test__a=a, test__b=b)
+
+    assert only(run_search(conn))["verdict"] == "real"
+
+
+def test_min_buckets_is_configurable(conn, seed_series):
+    a, b = related_walks(seed=1)
+    seed_series(test__a=a, test__b=b)
+
+    assert only(run_search(conn))["verdict"] == "real"
+    r = only(run_search(conn, {"min_buckets": 500}))
+    assert (r["verdict"], r["reason"]) == ("too_little_data", "too_few_buckets")
