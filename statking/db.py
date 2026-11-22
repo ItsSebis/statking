@@ -83,9 +83,23 @@ def _migration_1_baseline(conn):
            SELECT source,id,first_seen,price_eur FROM listings WHERE price_eur IS NOT NULL""")
 
 
+def _migration_2_snapshots(conn):
+    """Search results: one row per Search (parameters, Hypothesis count) + one per tested pair."""
+    conn.executescript("""
+        CREATE TABLE snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, params TEXT NOT NULL,
+            hypotheses INTEGER NOT NULL, real_count INTEGER NOT NULL);
+        CREATE TABLE snapshot_results (
+            snapshot_id INTEGER NOT NULL REFERENCES snapshots(id), series_a TEXT NOT NULL, series_b TEXT NOT NULL,
+            lag INTEGER NOT NULL, res TEXT NOT NULL, n INTEGER NOT NULL, spearman REAL, pearson_raw REAL,
+            p_value REAL, verdict TEXT NOT NULL, reason TEXT,
+            PRIMARY KEY (snapshot_id, series_a, series_b, lag));""")
+
+
 # (version, function) applied in order, once each. Append only; never edit a shipped migration.
 MIGRATIONS = [
     (1, _migration_1_baseline),
+    (2, _migration_2_snapshots),
 ]
 
 

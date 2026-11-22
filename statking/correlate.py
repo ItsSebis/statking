@@ -65,12 +65,8 @@ def differenced(d, res):
     return {k: v - d[shift(k, res, -1)] for k, v in d.items() if shift(k, res, -1) in d}
 
 
-def aligned(conn, a, b, lag=0, start=None, end=None, res=None, diff=False):
-    """-> (xs, ys, buckets, res). b is read `lag` buckets after a."""
-    res = res or common_resolution(conn, a, b)
-    da, db_ = bucketed(conn, a, res), bucketed(conn, b, res)
-    if diff:
-        da, db_ = differenced(da, res), differenced(db_, res)
+def align_buckets(da, db_, res, lag=0, start=None, end=None):
+    """-> (xs, ys, buckets) for two {bucket: value} dicts. b is read `lag` buckets after a."""
     xs, ys, ks = [], [], []
     for k, v in sorted(da.items()):
         if (start and k < start[:LEN[res]]) or (end and k > end[:LEN[res]]):
@@ -78,7 +74,16 @@ def aligned(conn, a, b, lag=0, start=None, end=None, res=None, diff=False):
         k2 = shift(k, res, lag)
         if k2 in db_:
             xs.append(v); ys.append(db_[k2]); ks.append(k)
-    return xs, ys, ks, res
+    return xs, ys, ks
+
+
+def aligned(conn, a, b, lag=0, start=None, end=None, res=None, diff=False):
+    """-> (xs, ys, buckets, res). b is read `lag` buckets after a."""
+    res = res or common_resolution(conn, a, b)
+    da, db_ = bucketed(conn, a, res), bucketed(conn, b, res)
+    if diff:
+        da, db_ = differenced(da, res), differenced(db_, res)
+    return (*align_buckets(da, db_, res, lag, start, end), res)
 
 
 def correlate(conn, a, b, lag=0):

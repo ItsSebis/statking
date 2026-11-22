@@ -8,7 +8,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .. import cities, correlate, db, geo, steam_job
+from .. import cities, correlate, db, geo, search, steam_job
 
 DB_PATH = os.environ.get("STATKING_DB", "data/statking.db")
 STATIC = os.path.join(os.path.dirname(__file__), "static")
@@ -126,6 +126,18 @@ def corr(a: str, b: str, start: Optional[str] = None, end: Optional[str] = None,
     step = max(1, len(xs) // 600)  # cap scatter points
     return {"r": None if r0 is None else round(r0, 4), "n": len(xs), "unit": res, "scan": scan,
             "points": [{"x": round(x, 3), "y": round(y, 3), "d": k} for x, y, k in list(zip(xs, ys, ks))[::step]]}
+
+
+@app.get("/api/search/latest")
+def search_latest():
+    """Most recent Snapshot (parameters + every tested Hypothesis), or null before the first Search."""
+    return search.latest_snapshot(db.connect(DB_PATH))
+
+
+@app.post("/api/search/run")
+def search_run():
+    """'Run now': a full Search over all Series, stored as a new Snapshot."""
+    return search.run_search(db.connect(DB_PATH))
 
 
 @app.get("/api/layers")

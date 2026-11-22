@@ -27,6 +27,11 @@ main{height:calc(100% - 55px)}
 .view{display:none;height:100%}
 .view.on{display:grid}
 #rent{grid-template-columns:1fr 360px}
+#search{display:none;overflow:auto;padding:20px;align-content:start}
+#search.on{display:block}
+#search button.run{background:var(--accent);color:#0d1117;border:0;border-radius:8px;padding:7px 16px;font:inherit;font-weight:600;cursor:pointer}
+#search button.run:disabled{opacity:.5;cursor:wait}
+.v-real{color:var(--accent);font-weight:600}
 #mapwrap{position:relative;min-height:0}
 #map{position:absolute;inset:0;background:#0b0f15}
 .leaflet-container{font:inherit}
@@ -101,11 +106,19 @@ td.n,th.n{text-align:right}
     <button data-v="rent" class="on">Mieten</button>
     <button data-v="steam">Steam</button>
     <button data-v="explore">Explorer</button>
+    <button data-v="search">Suche</button>
   </nav>
   <div class="spacer"></div>
   <div class="stamp" id="stamp"></div>
 </header>
 <main>
+  <section id="search" class="view">
+    <div class="row" style="margin-bottom:12px">
+      <button class="run" id="runsearch">Jetzt suchen</button>
+      <span id="searchmeta"></span>
+    </div>
+    <table id="searchres"></table>
+  </section>
   <section id="rent" class="view on">
     <div id="mapwrap">
       <div id="map"></div>
@@ -203,7 +216,29 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   if (b.dataset.v === "rent") setTimeout(() => map.invalidateSize(), 50);
   if (b.dataset.v === "steam") loadSteam();
   if (b.dataset.v === "explore") initExplore();
+  if (b.dataset.v === "search") loadSearch();
 });
+
+// ---------- search ----------
+const VERDICT = {real:"Real", coincidence:"Zufall", too_little_data:"Zu wenig Daten"};
+function renderSearch(s) {
+  if (!s) { $("#searchmeta").textContent = "Noch keine Suche gelaufen."; $("#searchres").innerHTML = ""; return; }
+  $("#searchmeta").textContent = `${s.ts} · ${s.hypotheses} Hypothesen getestet · ${s.real_count} real`;
+  const f = x => x == null ? "–" : x.toFixed(3);
+  const esc = t => String(t).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+  $("#searchres").innerHTML = "<tr><th>Urteil</th><th>Serie A</th><th>Serie B</th><th>Lag</th><th>n</th><th>Spearman (bereinigt)</th><th>Pearson (roh)</th><th>p</th></tr>" +
+    s.results.map(r => `<tr><td class="${r.verdict === "real" ? "v-real" : ""}">${VERDICT[r.verdict] || r.verdict}</td><td>${esc(r.series_a)}</td><td>${esc(r.series_b)}</td><td>${r.lag}</td><td>${r.n}</td><td>${f(r.spearman)}</td><td>${f(r.pearson_raw)}</td><td>${r.p_value == null ? "–" : r.p_value.toExponential(1)}</td></tr>`).join("");
+}
+async function loadSearch() { renderSearch(await (await fetch("/api/search/latest")).json()); }
+$("#runsearch").onclick = async () => {
+  const btn = $("#runsearch"); btn.disabled = true; btn.textContent = "Läuft …";
+  try {
+    const r = await fetch("/api/search/run", {method: "POST"});
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    renderSearch(await r.json());
+  } catch (e) { $("#searchmeta").textContent = "Suche fehlgeschlagen: " + e.message; }
+  finally { btn.disabled = false; btn.textContent = "Jetzt suchen"; }
+};
 
 // deep links: /#steam, /#explore
 addEventListener("load", () => { const b = document.querySelector(`nav button[data-v="${location.hash.slice(1)}"]`); if (b) b.click(); });
