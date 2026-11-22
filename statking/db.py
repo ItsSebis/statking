@@ -163,6 +163,11 @@ def _migration_8_places(conn):
             conn.execute("DELETE FROM metrics WHERE series=? AND ts=?", (series, ts))
 
 
+def _migration_9_result_kind(conn):
+    """over_time (Series pair) or across_places (Place Metric pair) per Search result."""
+    conn.execute("ALTER TABLE snapshot_results ADD COLUMN kind TEXT NOT NULL DEFAULT 'over_time'")
+
+
 # (version, function) applied in order, once each. Append only; never edit a shipped migration.
 MIGRATIONS = [
     (1, _migration_1_baseline),
@@ -173,6 +178,7 @@ MIGRATIONS = [
     (6, _migration_6_pair_reviews),
     (7, _migration_7_source_health),
     (8, _migration_8_places),
+    (9, _migration_9_result_kind),
 ]
 
 

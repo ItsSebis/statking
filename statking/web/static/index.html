@@ -253,7 +253,7 @@ function searchTable(rows, s) {
   return "<table>" + head + rows.map(r => {
     const i = s.results.indexOf(r);
     const badge = r.verdict === "real" ? '<span class="badge real">Real</span>' : '<span class="badge">' + (r.verdict === "coincidence" ? "Zufall" : r.verdict === "derived" ? "Abgeleitet" : "Zu wenig Daten") + "</span>";
-    return `<tr class="hit" data-i="${i}" title="Im Explorer öffnen"><td>${badge}</td><td>${esc(r.series_a)}</td><td>${esc(r.series_b)}</td><td>${r.lag}</td><td>${r.n}</td>` +
+    return `<tr class="hit" data-i="${i}" title="Im Explorer öffnen"><td>${badge}</td><td>${esc(r.series_a)}</td><td>${esc(r.series_b)}${r.kind === "across_places" ? ' <span class="badge" title="Korrelation über Orte, nicht über die Zeit">Über Orte</span>' : ""}</td><td>${r.kind === "across_places" ? "–" : r.lag}</td><td>${r.n}</td>` +
       `<td class="vs">${f(r.pearson_raw)} → ${f(r.pearson)}</td><td>${f(r.spearman)}</td><td>${r.q_value == null ? "–" : r.q_value.toExponential(1)}</td>` +
       `<td>${r.reason ? REASON[r.reason] || esc(r.reason) : ""}</td><td>${reviewCell(r, i)}</td><td><button class="hist" data-i="${i}">Verlauf</button></td></tr>`;
   }).join("") + "</table>";
@@ -271,6 +271,7 @@ function renderSearch(s) {
   $("#searchres").querySelectorAll("tr.hit").forEach(tr => tr.onclick = e => {
     if (e.target.closest("select, button")) return;
     const r = s.results[+tr.dataset.i];
+    if (r.kind === "across_places") return;  // Explorer plots Series over time; Place Metrics have no time axis here
     openPair(r.series_a, r.series_b);
   });
 }
