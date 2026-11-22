@@ -9,6 +9,7 @@ import requests
 from .. import cities
 
 NAME = "weather"  # Source interface: see statking/sources/__init__.py
+BACKFILL_FROM = "2010-01-01"  # Bright Sky / DWD station history
 API = "https://api.brightsky.dev/weather"
 UA = "statking/0.1 (personal research)"
 
