@@ -267,3 +267,52 @@ def test_min_buckets_is_configurable(conn, seed_series):
     assert only(run_search(conn))["verdict"] == "real"
     r = only(run_search(conn, {"min_buckets": 500}))
     assert (r["verdict"], r["reason"]) == ("too_little_data", "too_few_buckets")
+
+
+def test_pair_inside_one_family_is_a_flagged_derived_pair_not_counted_as_a_hypothesis(conn, seed_series):
+    a, b = related_walks(seed=1)
+    seed_series(rent__kiel__wg__active=a, rent__kiel__wg__new=b)
+
+    snap = run_search(conn)
+
+    assert snap["hypotheses"] == 0
+    assert snap["real_count"] == 0
+    (r,) = snap["results"]
+    assert (r["series_a"], r["series_b"]) == ("rent.kiel.wg.active", "rent.kiel.wg.new")
+    assert (r["verdict"], r["reason"]) == ("derived", "same_family")
+
+
+def test_district_series_is_derived_from_its_city_median(conn, seed_series):
+    a, b = related_walks(seed=1)
+    seed_series(rent__kiel__wg__median_eur_m2=a, rent__kiel__wg__eur_m2__Gaarden=b)
+
+    snap = run_search(conn)
+
+    assert snap["hypotheses"] == 0
+    assert only(snap)["verdict"] == "derived"
+
+
+def test_unrelated_pairs_from_the_same_source_are_still_tested(conn, seed_series):
+    a, b = related_walks(seed=1)
+    c, d = related_walks(seed=2)
+    seed_series(rent__kiel__wg__active=a, rent__kiel__wg__new=b, rent__kiel__1zi__active=c, rent__hamburg__wg__active=d)
+
+    snap = run_search(conn)
+
+    kinds = {(r["series_a"], r["series_b"]): r["verdict"] for r in snap["results"]}
+    assert kinds[("rent.kiel.wg.active", "rent.kiel.wg.new")] == "derived"
+    assert snap["hypotheses"] == 5  # 6 pairs, one derived
+    assert sum(v == "derived" for v in kinds.values()) == 1
+
+
+def test_hypothesis_count_excludes_every_derived_pair_in_a_family(conn, seed_series):
+    a, b = related_walks(seed=1)
+    rng = random.Random(3)
+    plain = {f"noise__{i}": random_walk(rng, 200) for i in range(3)}
+    family = {f"rent__kiel__wg__m{i}": random_walk(rng, 200) for i in range(6)}
+    seed_series(test__a=a, test__b=b, **plain, **family)
+
+    snap = run_search(conn)
+
+    tested = [r for r in snap["results"] if r["verdict"] != "derived"]
+    assert snap["hypotheses"] == len(tested) == 55 - 15  # 11 series -> 55 pairs; 15 inside the 6-series family

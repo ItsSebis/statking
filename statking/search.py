@@ -6,7 +6,8 @@ for trend and seasonality (detrend/deseason where history allows, first differen
 Spearman with a block-bootstrap p-value (Pearson stored as a secondary number),
 Benjamini-Hochberg FDR correction over the whole Search.
 A Real candidate must also be Stable (same sign and significance on both halves and rolling windows).
-Later slices add Derived Pairs."""
+Pairs inside one Family (derived from the Series name prefix) are Derived Pairs: flagged in the
+results and left out of the Hypothesis count and the FDR correction."""
 import json
 import math
 import random
@@ -24,6 +25,31 @@ DEFAULT_PARAMS = {
     "bootstrap_samples": 300,
     "strong_raw": 0.5,     # |Raw Correlation| from which a non-Real pair is blamed on trend/seasonality
 }
+
+
+# Series-name prefix -> number of leading dotted segments that identify the Family.
+# Only prefixes whose Series are mechanically related are listed (weather.* / wiki.* / chess.* /
+# steam.* Series under one prefix are independent measures, not derivations of each other). Slice 2 makes Families explicit per Source.
+FAMILY_SEGMENTS = {"rent": 3}
+
+
+def family(name):
+    """The Family a Series belongs to (e.g. rent.kiel.wg), or None if it is not in one."""
+    parts = name.split(".")
+    n = FAMILY_SEGMENTS.get(parts[0])
+    return ".".join(parts[:n]) if n and len(parts) > n else None
+
+
+def _is_derived(a, b):
+    fa = family(a)
+    return fa is not None and fa == family(b)
+
+
+def _derived(cache, a, b, lag):
+    res = max(cache["res"][a], cache["res"][b], key=correlate.ORDER.index)
+    return {"series_a": a, "series_b": b, "lag": lag, "res": res, "n": 0, "pearson_raw": None,
+            "pearson": None, "adjustment": None, "spearman": None, "p_value": None,
+            "q_value": None, "verdict": "derived", "reason": "same_family"}
 
 
 def _ranks(xs):
@@ -187,13 +213,14 @@ def run_search(conn, params=None):
         return resampler_cache[n]
 
     cache["resamplers"] = resamplers
-    results = [_judge(cache, a, b, lag, params)
+    results = [_derived(cache, a, b, lag) if _is_derived(a, b) else _judge(cache, a, b, lag, params)
                for a, b in combinations(names, 2) for lag in params["lags"]]
-    _apply_fdr(results, params["alpha"])
-    _apply_stability(results, params, resamplers)
+    hypotheses = [r for r in results if r["verdict"] != "derived"]
+    _apply_fdr(hypotheses, params["alpha"])
+    _apply_stability(hypotheses, params, resamplers)
     ts = db.now()
     cur = conn.execute("INSERT INTO snapshots (ts, params, hypotheses, real_count) VALUES (?,?,?,?)",
-                       (ts, json.dumps(params), len(results), sum(r["verdict"] == "real" for r in results)))
+                       (ts, json.dumps(params), len(hypotheses), sum(r["verdict"] == "real" for r in hypotheses)))
     sid = cur.lastrowid
     conn.executemany(
         """INSERT INTO snapshot_results (snapshot_id, series_a, series_b, lag, res, n, spearman,
