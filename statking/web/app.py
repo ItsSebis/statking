@@ -130,11 +130,12 @@ def corr(a: str, b: str, start: Optional[str] = None, end: Optional[str] = None,
 
 
 @app.get("/api/search/latest")
-def search_latest(review_state: Optional[str] = None):
+def search_latest(review_state: Optional[str] = None, source: Optional[str] = None, res: Optional[str] = None):
     """Most recent Snapshot (parameters + every tested Hypothesis), or null before the first Search.
-    review_state narrows the results to unreviewed / confirmed / dismissed pairs."""
+    review_state narrows the results to unreviewed / confirmed / dismissed pairs; source to pairs
+    involving that Source; res to one Resolution."""
     try:
-        return search.latest_snapshot(db.connect(DB_PATH), review_state=review_state)
+        return search.latest_snapshot(db.connect(DB_PATH), review_state=review_state, source=source, res=res)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

@@ -231,11 +231,15 @@ def run_search(conn, params=None):
     return latest_snapshot(conn, sid)
 
 
-def latest_snapshot(conn, snapshot_id=None, review_state=None):
+def latest_snapshot(conn, snapshot_id=None, review_state=None, source=None, res=None):
     """The given (or most recent) Snapshot with its per-Hypothesis results, or None.
-    Each result carries the pair's current Review State (joined live, not stored in the Snapshot)."""
+    Each result carries the pair's current Review State (joined live, not stored in the Snapshot).
+    Results can be narrowed by Review State, by Source (the first dotted segment of either Series
+    name) and by Resolution."""
     if review_state is not None and review_state not in review.STATES:
         raise ValueError(f"review_state must be one of {', '.join(review.STATES)}")
+    if res is not None and res not in correlate.ORDER:
+        raise ValueError(f"res must be one of {', '.join(correlate.ORDER)}")
     row = (conn.execute("SELECT * FROM snapshots WHERE id=?", (snapshot_id,)).fetchone() if snapshot_id
            else conn.execute("SELECT * FROM snapshots ORDER BY id DESC LIMIT 1").fetchone())
     if row is None:
@@ -248,6 +252,8 @@ def latest_snapshot(conn, snapshot_id=None, review_state=None):
            LEFT JOIN pair_reviews v ON v.series_a=s.series_a AND v.series_b=s.series_b
            WHERE s.snapshot_id=?
            ORDER BY (verdict='real') DESC, ABS(spearman) DESC""", (row["id"],)).fetchall()
-    results = [dict(r) for r in rows if review_state in (None, r["review_state"])]
+    results = [dict(r) for r in rows
+               if review_state in (None, r["review_state"]) and res in (None, r["res"])
+               and (source is None or source in (r["series_a"].split(".")[0], r["series_b"].split(".")[0]))]
     return {"id": row["id"], "ts": row["ts"], "params": json.loads(row["params"]),
             "hypotheses": row["hypotheses"], "real_count": row["real_count"], "results": results}

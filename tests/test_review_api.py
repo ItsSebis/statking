@@ -29,3 +29,9 @@ def test_invalid_review_is_a_400(client):
     r = client.put("/api/review", json={"series_a": "test.a", "series_b": "test.b", "state": "confirmed"})
     assert r.status_code == 400
     assert client.get("/api/search/latest", params={"review_state": "maybe"}).status_code == 400
+
+
+def test_source_and_resolution_filters_over_http(client):
+    assert len(client.get("/api/search/latest", params={"source": "test", "res": "day"}).json()["results"]) == 1
+    assert client.get("/api/search/latest", params={"source": "wiki"}).json()["results"] == []
+    assert client.get("/api/search/latest", params={"res": "decade"}).status_code == 400

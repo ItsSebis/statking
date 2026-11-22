@@ -32,6 +32,11 @@ main{height:calc(100% - 55px)}
 #search button.run{background:var(--accent);color:#0d1117;border:0;border-radius:8px;padding:7px 16px;font:inherit;font-weight:600;cursor:pointer}
 #search button.run:disabled{opacity:.5;cursor:wait}
 .v-real{color:var(--accent);font-weight:600}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:var(--panel2);color:var(--ink2);box-shadow:inset 0 0 0 1px var(--line)}
+.badge.real{background:var(--accent);color:#0d1117;box-shadow:none}
+#searchres details{margin-top:14px} #searchres summary{cursor:pointer;color:var(--ink2);font-weight:600;padding:6px 0}
+#searchres tr.hit{cursor:pointer} #searchres tr.hit:hover td{background:var(--panel2)}
+.vs{white-space:nowrap}
 #mapwrap{position:relative;min-height:0}
 #map{position:absolute;inset:0;background:#0b0f15}
 .leaflet-container{font:inherit}
@@ -121,9 +126,16 @@ td.n,th.n{text-align:right}
         <option value="confirmed">Bestätigt</option>
         <option value="dismissed">Verworfen</option>
       </select>
+      <select id="sourcefilter"><option value="">Alle Quellen</option></select>
+      <select id="resfilter">
+        <option value="">Alle Auflösungen</option>
+        <option value="day">Tag</option>
+        <option value="month">Monat</option>
+        <option value="year">Jahr</option>
+      </select>
       <span id="searchmeta"></span>
     </div>
-    <table id="searchres"></table>
+    <div id="searchres"></div>
   </section>
   <section id="rent" class="view on">
     <div id="mapwrap">
@@ -226,15 +238,47 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
 });
 
 // ---------- search ----------
-const VERDICT = {real:"Real", coincidence:"Zufall", too_little_data:"Zu wenig Daten"};
+const REASON = {not_significant:"nicht signifikant", trend_driven:"vom Trend getrieben", seasonality_driven:"von der Saisonalität getrieben",
+  unstable:"nicht stabil über die Zeit", too_few_buckets:"zu wenige Datenpunkte", untestable:"nicht testbar (konstante Daten)", same_family:"abgeleitetes Paar (gleiche Familie)"};
+const SECTIONS = [
+  {verdict:"real", title:"Reale Korrelationen", open:true},
+  {verdict:"coincidence", title:"Zufälle", open:false},
+  {verdict:"too_little_data", title:"Zu wenig Daten", open:false},
+  {verdict:"derived", title:"Abgeleitete Paare", open:false},
+];
+const escHtml = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function searchTable(rows, s) {
+  const f = x => x == null ? "–" : x.toFixed(3);
+  const head = "<tr><th>Urteil</th><th>Serie A</th><th>Serie B</th><th>Lag</th><th>n</th><th>roh vs. bereinigt (Pearson)</th><th>Spearman (bereinigt)</th><th>q (FDR)</th><th>Grund</th><th>Prüfung</th></tr>";
+  return "<table>" + head + rows.map(r => {
+    const i = s.results.indexOf(r);
+    const badge = r.verdict === "real" ? '<span class="badge real">Real</span>' : '<span class="badge">' + (r.verdict === "coincidence" ? "Zufall" : r.verdict === "derived" ? "Abgeleitet" : "Zu wenig Daten") + "</span>";
+    return `<tr class="hit" data-i="${i}" title="Im Explorer öffnen"><td>${badge}</td><td>${escHtml(r.series_a)}</td><td>${escHtml(r.series_b)}</td><td>${r.lag}</td><td>${r.n}</td>` +
+      `<td class="vs">${f(r.pearson_raw)} → ${f(r.pearson)}</td><td>${f(r.spearman)}</td><td>${r.q_value == null ? "–" : r.q_value.toExponential(1)}</td>` +
+      `<td>${r.reason ? REASON[r.reason] || escHtml(r.reason) : ""}</td><td>${reviewCell(r, i)}</td></tr>`;
+  }).join("") + "</table>";
+}
 function renderSearch(s) {
   if (!s) { $("#searchmeta").textContent = "Noch keine Suche gelaufen."; $("#searchres").innerHTML = ""; return; }
   $("#searchmeta").textContent = `${s.ts} · ${s.hypotheses} Hypothesen getestet (FDR-korrigiert über alle) · ${s.real_count} real`;
-  const f = x => x == null ? "–" : x.toFixed(3);
-  const esc = t => String(t).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-  $("#searchres").innerHTML = "<tr><th>Urteil</th><th>Serie A</th><th>Serie B</th><th>Lag</th><th>n</th><th>Spearman (bereinigt)</th><th>Pearson (bereinigt)</th><th>Pearson (roh)</th><th>p</th><th>q (FDR)</th><th>Prüfung</th></tr>" +
-    s.results.map((r, i) => `<tr><td class="${r.verdict === "real" ? "v-real" : ""}">${VERDICT[r.verdict] || r.verdict}</td><td>${esc(r.series_a)}</td><td>${esc(r.series_b)}</td><td>${r.lag}</td><td>${r.n}</td><td>${f(r.spearman)}</td><td>${f(r.pearson)}</td><td>${f(r.pearson_raw)}</td><td>${r.p_value == null ? "–" : r.p_value.toExponential(1)}</td><td>${r.q_value == null ? "–" : r.q_value.toExponential(1)}</td><td>${reviewCell(r, i)}</td></tr>`).join("");
+  $("#searchres").innerHTML = SECTIONS.map(sec => {
+    const rows = s.results.filter(r => r.verdict === sec.verdict);
+    if (sec.verdict === "real") return `<h3>${sec.title} (${rows.length})</h3>` + (rows.length ? searchTable(rows, s) : '<div class="empty">Keine realen Korrelationen.</div>');
+    return rows.length ? `<details${sec.open ? " open" : ""}><summary>${sec.title} (${rows.length})</summary>${searchTable(rows, s)}</details>` : "";
+  }).join("");
   $("#searchres").querySelectorAll("select.review").forEach(sel => sel.onchange = () => setReview(s.results[+sel.dataset.i], sel.value));
+  $("#searchres").querySelectorAll("tr.hit").forEach(tr => tr.onclick = e => {
+    if (e.target.closest("select")) return;
+    const r = s.results[+tr.dataset.i];
+    openPair(r.series_a, r.series_b);
+  });
+}
+async function openPair(a, b) {
+  document.querySelector('nav button[data-v="explore"]').click();
+  await initExplore();
+  if (!exList.some(x => x.name === a) || !exList.some(x => x.name === b)) return;
+  $("#sa").value = a; $("#sb").value = b; $("#diff").checked = true;
+  renderExplore();
 }
 const REVIEW = {unreviewed:"Ungeprüft", confirmed:"Bestätigt", dismissed:"Verworfen"};
 function reviewCell(r, i) {
@@ -253,11 +297,23 @@ async function setReview(r, state) {
   if (!res.ok) alert("Fehler: " + (await res.json()).detail);
   loadSearch();
 }
-async function loadSearch() {
-  const f = $("#reviewfilter").value;
-  renderSearch(await (await fetch("/api/search/latest" + (f ? "?review_state=" + f : ""))).json());
+let sourcesLoaded = false;
+async function loadSources() {
+  if (sourcesLoaded) return;
+  sourcesLoaded = true;
+  const list = await (await fetch("/api/series")).json();
+  const names = [...new Set(list.map(x => x.name.split(".")[0]))].sort();
+  $("#sourcefilter").innerHTML += names.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join("");
 }
-$("#reviewfilter").onchange = loadSearch;
+async function loadSearch() {
+  await loadSources();
+  const q = new URLSearchParams();
+  if ($("#reviewfilter").value) q.set("review_state", $("#reviewfilter").value);
+  if ($("#sourcefilter").value) q.set("source", $("#sourcefilter").value);
+  if ($("#resfilter").value) q.set("res", $("#resfilter").value);
+  renderSearch(await (await fetch("/api/search/latest?" + q)).json());
+}
+$("#reviewfilter").onchange = $("#sourcefilter").onchange = $("#resfilter").onchange = loadSearch;
 $("#runsearch").onclick = async () => {
   const btn = $("#runsearch"); btn.disabled = true; btn.textContent = "Läuft …";
   try {
@@ -491,14 +547,14 @@ async function loadSteam() {
 // ---------- explorer ----------
 const UNITS = {day:"Tage", month:"Monate", year:"Jahre"};
 const CA = "#3fd0c9", CB = "#f2b84b";
-let exList = [], exInit = false, exCharts = {}, exRange = 365;
+let exList = [], exCharts = {}, exRange = 365;
 const nice = n => n.replace(/^[a-z]+\./, "").replace(/\./g, " · ").replace(/_/g, " ");
 const gridCol = "#1c2430", tickCol = "#6f7b8e";
 const tooltipOpts = {backgroundColor:"#151b24", borderColor:"#2a3342", borderWidth:1, titleColor:"#e8edf4", bodyColor:"#a6b1c2", padding:10};
 
-async function initExplore() {
-  if (exInit) return;
-  exInit = true;
+let exInitP = null;
+function initExplore() { return exInitP ||= doInitExplore(); }
+async function doInitExplore() {
   const list = await (await fetch("/api/series")).json();
   exList = list;
   const groups = {};
