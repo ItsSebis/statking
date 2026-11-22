@@ -60,3 +60,16 @@ def ar1_walk(rng, n, phi=0.8):
         x += d
         out.append(x)
     return out
+
+
+def lagged_walks(seed, lag, n=200, strength=0.9):
+    """Two random walks whose changes share white-noise shocks, b's arriving `lag` days after a's."""
+    rng = random.Random(seed)
+    shocks = [rng.gauss(0, 1) for _ in range(n)]
+    a, b, xa, xb = [], [], 0.0, 0.0
+    for t, s in enumerate(shocks):
+        xa += s
+        xb += strength * shocks[t - lag] * (t >= lag) + (1 - strength) * rng.gauss(0, 1)
+        a.append(xa)
+        b.append(xb)
+    return a, b

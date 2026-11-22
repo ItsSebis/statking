@@ -4,7 +4,7 @@ import pytest
 
 from statking.search import latest_snapshot, run_search
 
-from conftest import ar1_walk, random_walk, related_walks
+from conftest import ar1_walk, lagged_walks, random_walk, related_walks
 
 
 def verdicts(snapshot):
@@ -125,3 +125,45 @@ def test_pearson_on_adjusted_series_is_stored_next_to_spearman(conn, seed_series
     assert r["pearson"] == pytest.approx(1.0)
     assert r["spearman"] == pytest.approx(1.0)
     assert r["pearson_raw"] == pytest.approx(1.0)
+
+
+def test_planted_lagged_relationship_is_found_at_the_correct_lag(conn, seed_series):
+    a, b = lagged_walks(seed=1, lag=3)
+    seed_series(test__a=a, test__b=b)
+
+    snap = run_search(conn, {"lags": list(range(-5, 6))})
+
+    real = [r["lag"] for r in snap["results"] if r["verdict"] == "real"]
+    assert real == [3]  # b follows a by 3 days; neighbouring lags are not Real
+    assert snap["results"][0]["lag"] == 3  # and it ranks first
+
+
+def test_every_lag_is_a_hypothesis_in_the_count(conn, seed_series):
+    rng = random.Random(7)
+    seed_series(**{f"noise__{i}": random_walk(rng, 200) for i in range(4)})
+
+    snap = run_search(conn, {"lags": [-2, -1, 0, 1, 2]})
+
+    assert snap["hypotheses"] == 6 * 5
+    assert sorted({r["lag"] for r in snap["results"]}) == [-2, -1, 0, 1, 2]
+    assert snap["params"]["lags"] == [-2, -1, 0, 1, 2]
+    assert snap["real_count"] == 0
+
+
+def test_lag_range_param_expands_to_lags(conn, seed_series):
+    a, b = lagged_walks(seed=1, lag=3)
+    seed_series(test__a=a, test__b=b)
+
+    snap = run_search(conn, {"max_lag": 4})
+
+    assert sorted(r["lag"] for r in snap["results"]) == list(range(-4, 5))
+
+
+def test_invalid_or_duplicate_lag_params(conn, seed_series):
+    a, b = lagged_walks(seed=1, lag=3)
+    seed_series(test__a=a, test__b=b)
+
+    for bad in ({"max_lag": -1}, {"max_lag": 1.5}, {"max_lag": 1, "lags": [0]}, {"lags": [0.5]}):
+        with pytest.raises(ValueError):
+            run_search(conn, bad)
+    assert run_search(conn, {"lags": [1, 0, 1]})["hypotheses"] == 2

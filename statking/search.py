@@ -1,9 +1,10 @@
 """The Search: test every Hypothesis (Series pair) and judge it on Adjusted Series.
 
-Single entry point: run_search(conn, params) -> Snapshot. Walking-skeleton scope: lag 0 only,
-first differencing, Spearman with a block-bootstrap p-value (Pearson stored as a secondary
-number), Benjamini-Hochberg FDR correction over the whole Search.
-Later slices add Stability, Derived Pairs, more Lags."""
+Single entry point: run_search(conn, params) -> Snapshot. Every pair is tested at each Lag in
+params['lags'] (or -max_lag..max_lag); each (pair, Lag) is one Hypothesis. First differencing,
+Spearman with a block-bootstrap p-value (Pearson stored as a secondary number),
+Benjamini-Hochberg FDR correction over the whole Search.
+Later slices add Stability and Derived Pairs."""
 import json
 import math
 import random
@@ -15,7 +16,7 @@ from . import correlate, db
 DEFAULT_PARAMS = {
     "alpha": 0.01,         # false-discovery rate the Search controls (Benjamini-Hochberg)
     "min_buckets": 30,     # fewer aligned buckets than this -> Too Little Data
-    "lags": [0],
+    "lags": [0],           # Lags (in Resolution buckets, b read `lag` after a) tested for every pair
     "seed": 0,             # fixes the bootstrap resamples: same data + seed -> identical p-values
     "bootstrap_samples": 300,
 }
@@ -110,7 +111,18 @@ def _apply_fdr(results, alpha):
 
 def run_search(conn, params=None):
     """Test all Series pairs and store the result as a Snapshot (returned)."""
-    params = {**DEFAULT_PARAMS, **(params or {})}
+    given = params or {}
+    params = {**DEFAULT_PARAMS, **given}
+    if "max_lag" in given:  # shorthand for the symmetric range -max_lag..max_lag
+        if "lags" in given:
+            raise ValueError("pass either 'lags' or 'max_lag', not both")
+        if not isinstance(given["max_lag"], int) or given["max_lag"] < 0:
+            raise ValueError("max_lag must be a non-negative integer")
+        params["lags"] = list(range(-given["max_lag"], given["max_lag"] + 1))
+    params.pop("max_lag", None)
+    if not all(isinstance(g, int) for g in params["lags"]):
+        raise ValueError("lags must be integers")
+    params["lags"] = sorted(set(params["lags"]))  # a repeated Lag would double-count a Hypothesis
     names = [r[0] for r in correlate.list_series(conn)]
     cache = {"res": {s: correlate.granularity(conn, s) for s in names}, "b": {}}
 
