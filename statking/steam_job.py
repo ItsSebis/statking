@@ -1,45 +1,13 @@
 """Collect + report Steam stats."""
-import os
-import time
-
-from datetime import datetime, timezone
-
-from .db import now, put_metrics
+from .db import put_metrics
 from .sources import steam
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS steam_global (ts INTEGER PRIMARY KEY, online INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS steam_top (ts TEXT NOT NULL, rank INTEGER, appid INTEGER, concurrent INTEGER, peak INTEGER);
-CREATE TABLE IF NOT EXISTS steam_apps (appid INTEGER PRIMARY KEY, name TEXT);
-CREATE TABLE IF NOT EXISTS steam_tracked (ts TEXT NOT NULL, appid INTEGER NOT NULL, players INTEGER);
-CREATE INDEX IF NOT EXISTS i_top ON steam_top(ts, appid);
-"""
-# extra apps to track on every run besides the top 100 (comma separated appids)
-TRACKED = [int(x) for x in os.environ.get("STEAM_TRACK", "730,570,440").split(",") if x.strip()]
+from .sources.steam import SCHEMA
 
 
 def collect(conn):
-    conn.executescript(SCHEMA)
-    ts = now()
-    pts = steam.global_online()
-    conn.executemany("INSERT OR IGNORE INTO steam_global VALUES (?,?)", pts)
-    top = steam.top_games()
-    conn.executemany("INSERT INTO steam_top VALUES (?,?,?,?,?)", [(ts, *t) for t in top])
-    known = {r[0] for r in conn.execute("SELECT appid FROM steam_apps")}
-    for appid in {t[1] for t in top[:25]} | set(TRACKED):  # name lookups only for top 25 + tracked
-        if appid not in known:
-            conn.execute("INSERT OR REPLACE INTO steam_apps VALUES (?,?)", (appid, steam.app_name(appid)))
-            time.sleep(1.5)  # store API is rate limited
-    tracked = {}
-    for appid in TRACKED:
-        tracked[appid] = steam.current_players(appid)
-        conn.execute("INSERT INTO steam_tracked VALUES (?,?,?)", (ts, appid, tracked[appid]))
-    iso = lambda t: datetime.fromtimestamp(t, timezone.utc).isoformat(timespec="seconds")
-    put_metrics(conn, [("steam.online", iso(t), n) for t, n in pts])
-    put_metrics(conn, [("steam.in_game_top100", ts, sum(t[2] for t in top))])
-    put_metrics(conn, [("steam.players.%d" % a, ts, n) for a, n in tracked.items() if n is not None])
+    """CLI entry (statking steam-scrape): one run with default params; the scheduler uses the Source."""
+    put_metrics(conn, steam.collect(conn, {}))
     conn.commit()
-    print(f"steam: {len(pts)} global points, {len(top)} top games, {len(TRACKED)} tracked")
 
 
 def report(conn):

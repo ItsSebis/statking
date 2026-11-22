@@ -8,8 +8,10 @@ import time
 import requests
 from bs4 import BeautifulSoup
 
-from .. import cities
+from .. import cities, db, geo
 
+NAME = "rent"  # Source interface: see statking/sources/__init__.py
+FAMILY = 3  # rent.<city>.<category>: Series of one city+category are Derived Pairs
 BASE = "https://www.wg-gesucht.de"
 # category -> (url slug, wg-gesucht category id)
 CATEGORIES = {
@@ -106,3 +108,26 @@ def scrape(city: str, category: str, delay=(4.0, 8.0), max_pages=None):
         items.extend(page_items)
         time.sleep(random.uniform(*delay))
     return items, False  # hit the page cap: can't be sure it's complete
+
+
+def collect(conn, params):
+    """Cities one after another with long pauses; a bot check aborts the whole run (next try after the interval).
+    Listings go to the listings tables and db.save_run records the rent.* Series itself (they derive from the
+    stored listings), so this returns no rows. params: cities (default: all enabled), max_pages, pause_seconds."""
+    pause = params.get("pause_seconds", 45)
+    max_pages = params.get("max_pages")
+    first = True
+    for city in params.get("cities") or cities.enabled():
+        for cat in cities.CITIES[city]["categories"]:
+            if not first:
+                time.sleep(pause)
+            first = False
+            try:
+                items, complete = scrape(city, cat, max_pages=max_pages)
+            except Blocked as e:
+                print(f"rent: blocked ({e}); aborting this run, will retry next interval")
+                raise
+            new, gone = db.save_run(conn, "wg-gesucht", cat, items, complete, city)
+            print(f"rent[{city}/{cat}]: {len(items)} listings, {new} new, {gone} gone, complete={complete}")
+        geo.geocode_missing(conn)
+    return []

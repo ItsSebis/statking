@@ -1,4 +1,28 @@
 {
+  "rent": {
+    "interval_hours": 24,
+    "params": {
+      "cities": ["kiel", "hamburg", "berlin", "muenchen", "koeln", "frankfurt", "leipzig", "hannover"],
+      "max_pages": 10,
+      "pause_seconds": 45
+    }
+  },
+  "steam": {
+    "interval_hours": 0.25,
+    "params": {"tracked": [730, 570, 440]}
+  },
+  "wiki": {
+    "interval_hours": 24,
+    "params": {"articles": ["de:Weihnachtsmann", "de:Trennung"], "backfill_from": "2024-01-01"}
+  },
+  "chess": {
+    "interval_hours": 6,
+    "params": {"user": ""}
+  },
+  "stat": {
+    "interval_hours": 168,
+    "params": {}
+  },
   "weather": {
     "interval_hours": 12,
     "params": {"backfill_from": "2024-01-01", "pause_seconds": 1}
