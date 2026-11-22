@@ -248,13 +248,13 @@ const SECTIONS = [
 ];
 function searchTable(rows, s) {
   const f = x => x == null ? "–" : x.toFixed(3);
-  const head = "<tr><th>Urteil</th><th>Serie A</th><th>Serie B</th><th>Lag</th><th>n</th><th>roh vs. bereinigt (Pearson)</th><th>Spearman (bereinigt)</th><th>q (FDR)</th><th>Grund</th><th>Prüfung</th></tr>";
+  const head = "<tr><th>Urteil</th><th>Serie A</th><th>Serie B</th><th>Lag</th><th>n</th><th>roh vs. bereinigt (Pearson)</th><th>Spearman (bereinigt)</th><th>q (FDR)</th><th>Grund</th><th>Prüfung</th><th>Verlauf</th></tr>";
   return "<table>" + head + rows.map(r => {
     const i = s.results.indexOf(r);
     const badge = r.verdict === "real" ? '<span class="badge real">Real</span>' : '<span class="badge">' + (r.verdict === "coincidence" ? "Zufall" : r.verdict === "derived" ? "Abgeleitet" : "Zu wenig Daten") + "</span>";
     return `<tr class="hit" data-i="${i}" title="Im Explorer öffnen"><td>${badge}</td><td>${esc(r.series_a)}</td><td>${esc(r.series_b)}</td><td>${r.lag}</td><td>${r.n}</td>` +
       `<td class="vs">${f(r.pearson_raw)} → ${f(r.pearson)}</td><td>${f(r.spearman)}</td><td>${r.q_value == null ? "–" : r.q_value.toExponential(1)}</td>` +
-      `<td>${r.reason ? REASON[r.reason] || esc(r.reason) : ""}</td><td>${reviewCell(r, i)}</td></tr>`;
+      `<td>${r.reason ? REASON[r.reason] || esc(r.reason) : ""}</td><td>${reviewCell(r, i)}</td><td><button class="hist" data-i="${i}">Verlauf</button></td></tr>`;
   }).join("") + "</table>";
 }
 function renderSearch(s) {
@@ -266,11 +266,23 @@ function renderSearch(s) {
     return rows.length ? `<details${sec.open ? " open" : ""}><summary>${sec.title} (${rows.length})</summary>${searchTable(rows, s)}</details>` : "";
   }).join("");
   $("#searchres").querySelectorAll("select.review").forEach(sel => sel.onchange = () => setReview(s.results[+sel.dataset.i], sel.value));
+  $("#searchres").querySelectorAll("button.hist").forEach(btn => btn.onclick = () => toggleHistory(btn.closest("tr"), s.results[+btn.dataset.i]));
   $("#searchres").querySelectorAll("tr.hit").forEach(tr => tr.onclick = e => {
-    if (e.target.closest("select")) return;
+    if (e.target.closest("select, button")) return;
     const r = s.results[+tr.dataset.i];
     openPair(r.series_a, r.series_b);
   });
+}
+const EVENT = {became_real:"wurde real", stopped_real:"war nicht mehr real"};
+async function toggleHistory(tr, r) {
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains("histrow")) { next.remove(); return; }
+  const res = await fetch(`/api/search/history?series_a=${encodeURIComponent(r.series_a)}&series_b=${encodeURIComponent(r.series_b)}`);
+  if (!res.ok) return alert("Fehler: HTTP " + res.status);
+  const h = await res.json();
+  const ev = h.events.length ? h.events.map(e => `${esc(e.ts)}: ${EVENT[e.event]}`).join(" · ") : "nie real";
+  const dots = h.snapshots.map(x => `<span title="${esc(x.ts)}: ${x.real == null ? "nicht getestet" : x.real ? "real" : esc(x.verdict)}">${x.real == null ? "·" : x.real ? "●" : "○"}</span>`).join(" ");
+  tr.insertAdjacentHTML("afterend", `<tr class="histrow"><td colspan="99">${h.snapshots.length} Snapshots: ${dots}<br>${ev}</td></tr>`);
 }
 async function openPair(a, b) {
   document.querySelector('nav button[data-v="explore"]').click();

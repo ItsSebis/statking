@@ -4,7 +4,7 @@ import os
 import time
 from datetime import date, datetime, timedelta, timezone
 
-from . import cities, db, geo, steam_job
+from . import cities, db, geo, search, steam_job
 from .sources import chess, opendata_sh, weather, wikipedia, wg_gesucht
 
 H = lambda name, default: float(os.environ.get(name, default))
@@ -128,6 +128,11 @@ def job_stat(conn):
     print(f"stat: {n} points")
 
 
+def job_search(conn):
+    snap = search.run_search(conn)
+    print(f"search: Snapshot {snap['id']}, {snap['hypotheses']} Hypotheses, {snap['real_count']} real")
+
+
 # name -> (function, default interval in hours, env var overriding it)
 JOBS = {
     "rent": (job_rent, 24, "RENT_INTERVAL_HOURS"),
@@ -136,6 +141,7 @@ JOBS = {
     "wiki": (job_wiki, 24, "WIKI_INTERVAL_HOURS"),
     "chess": (job_chess, 6, "CHESS_INTERVAL_HOURS"),
     "stat": (job_stat, 168, "STAT_INTERVAL_HOURS"),  # yearly data, weekly check is plenty
+    "search": (job_search, 24, "SEARCH_INTERVAL_HOURS"),  # nightly; the Snapshots are the history
 }
 
 

@@ -140,6 +140,12 @@ def search_latest(review_state: Optional[str] = None, source: Optional[str] = No
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/search/history")
+def search_history(series_a: str, series_b: str):
+    """A pair's history across Snapshots: Real or not in each, and when it became / stopped being Real."""
+    return search.pair_history(db.connect(DB_PATH), series_a, series_b)
+
+
 class ReviewIn(BaseModel):
     series_a: str
     series_b: str

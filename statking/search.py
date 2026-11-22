@@ -257,3 +257,23 @@ def latest_snapshot(conn, snapshot_id=None, review_state=None, source=None, res=
                and (source is None or source in (r["series_a"].split(".")[0], r["series_b"].split(".")[0]))]
     return {"id": row["id"], "ts": row["ts"], "params": json.loads(row["params"]),
             "hypotheses": row["hypotheses"], "real_count": row["real_count"], "results": results}
+
+
+def pair_history(conn, series_a, series_b):
+    """A pair's history across Snapshots (oldest first): whether it was Real in each (at any Lag;
+    None when the Snapshot did not test the pair) and the became_real / stopped_real events.
+    A Snapshot without the pair says nothing, so it never produces an event."""
+    a, b = sorted((series_a, series_b))
+    rows = conn.execute(
+        """SELECT s.id, s.ts, MAX(r.verdict='real') AS real, MAX(r.verdict) AS verdict
+           FROM snapshots s LEFT JOIN snapshot_results r
+             ON r.snapshot_id=s.id AND MIN(r.series_a, r.series_b)=? AND MAX(r.series_a, r.series_b)=?
+           GROUP BY s.id ORDER BY s.id""", (a, b)).fetchall()
+    snapshots = [{"id": r["id"], "ts": r["ts"], "real": None if r["real"] is None else bool(r["real"]), "verdict": r["verdict"]} for r in rows]
+    events, was = [], False
+    for s in snapshots:
+        if s["real"] is not None and s["real"] != was:
+            events.append({"snapshot_id": s["id"], "ts": s["ts"], "event": "became_real" if s["real"] else "stopped_real"})
+        if s["real"] is not None:
+            was = s["real"]
+    return {"series_a": a, "series_b": b, "snapshots": snapshots, "events": events}

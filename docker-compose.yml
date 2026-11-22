@@ -32,6 +32,7 @@ services:
       WIKI_INTERVAL_HOURS: 24
       CHESS_INTERVAL_HOURS: 6
       STAT_INTERVAL_HOURS: 168
+      SEARCH_INTERVAL_HOURS: 24   # the nightly Search; each run stores a Snapshot
       WIKI_ARTICLES: "de:Weihnachtsmann,de:Trennung"
       CHESSCOM_USER: ${CHESSCOM_USER:-}   # set in .env to enable chess tracking
     volumes:
