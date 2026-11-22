@@ -241,7 +241,7 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
 
 // ---------- search ----------
 const REASON = {not_significant:"nicht signifikant", trend_driven:"vom Trend getrieben", seasonality_driven:"von der Saisonalität getrieben",
-  unstable:"nicht stabil über die Zeit", too_few_buckets:"zu wenige Datenpunkte", untestable:"nicht testbar (konstante Daten)", same_family:"abgeleitetes Paar (gleiche Familie)"};
+  unstable:"nicht stabil über die Zeit", too_few_buckets:"zu wenige Datenpunkte", untestable:"nicht testbar (konstante Daten)", same_family:"abgeleitetes Paar (gleiche Familie)", same_metric_other_place:"gleiche Messgröße, anderer Ort"};
 const SECTIONS = [
   {verdict:"real", title:"Reale Korrelationen", open:true},
   {verdict:"coincidence", title:"Zufälle", open:false},

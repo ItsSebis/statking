@@ -301,8 +301,8 @@ def test_unrelated_pairs_from_the_same_source_are_still_tested(conn, seed_series
 
     kinds = {(r["series_a"], r["series_b"]): r["verdict"] for r in snap["results"]}
     assert kinds[("rent.kiel.wg.active", "rent.kiel.wg.new")] == "derived"
-    assert snap["hypotheses"] == 5  # 6 pairs, one derived
-    assert sum(v == "derived" for v in kinds.values()) == 1
+    assert snap["hypotheses"] == 4  # 6 pairs: one same-family, one same metric in another city
+    assert sum(v == "derived" for v in kinds.values()) == 2
 
 
 def test_hypothesis_count_excludes_every_derived_pair_in_a_family(conn, seed_series):
@@ -316,3 +316,21 @@ def test_hypothesis_count_excludes_every_derived_pair_in_a_family(conn, seed_ser
 
     tested = [r for r in snap["results"] if r["verdict"] != "derived"]
     assert snap["hypotheses"] == len(tested) == 55 - 15  # 11 series -> 55 pairs; 15 inside the 6-series family
+
+
+def test_same_metric_in_two_cities_is_a_flagged_derived_pair_not_counted(conn, seed_series):
+    a, b = related_walks(seed=1)
+    seed_series(weather__kiel__temp_mean=a, weather__hamburg__temp_mean=b)
+
+    snap = run_search(conn)
+
+    assert snap["hypotheses"] == 0
+    (r,) = snap["results"]
+    assert (r["verdict"], r["reason"]) == ("derived", "same_metric_other_place")
+
+
+def test_different_metrics_in_two_cities_are_still_hypotheses(conn, seed_series):
+    a, b = related_walks(seed=1)
+    seed_series(weather__kiel__temp_mean=a, weather__hamburg__wind_mean=b)
+
+    assert run_search(conn)["hypotheses"] > 0

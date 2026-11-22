@@ -14,7 +14,7 @@ import random
 from itertools import combinations
 from operator import itemgetter
 
-from . import adjust, correlate, db, review, sources
+from . import adjust, cities, correlate, db, review, sources
 
 DEFAULT_PARAMS = {
     "alpha": 0.01,         # false-discovery rate the Search controls (Benjamini-Hochberg)
@@ -39,16 +39,33 @@ def family(name):
     return ".".join(parts[:n]) if n and len(parts) > n else None
 
 
-def _is_derived(a, b):
+def _same_metric_other_place(a, b):
+    """Same Series measured in two cities (weather.kiel.temp_mean vs weather.hamburg.temp_mean): the
+    comparison is obvious (shared weather, shared market), so it is not a Hypothesis."""
+    pa, pb = a.split("."), b.split(".")
+    return (len(pa) >= 3 and len(pa) == len(pb) and pa[0] == pb[0] and pa[2:] == pb[2:]
+            and pa[1] != pb[1] and pa[1] in cities.CITIES and pb[1] in cities.CITIES)
+
+
+def _derived_reason(a, b):
     fa = family(a)
-    return fa is not None and fa == family(b)
+    if fa is not None and fa == family(b):
+        return "same_family"
+    if _same_metric_other_place(a, b):
+        return "same_metric_other_place"
+    return None
+
+
+def _is_derived(a, b):
+    return _derived_reason(a, b) is not None
 
 
 def _derived(cache, a, b, lag):
+    reason = _derived_reason(a, b)
     res = max(cache["res"][a], cache["res"][b], key=correlate.ORDER.index)
     return {"series_a": a, "series_b": b, "lag": lag, "res": res, "n": 0, "pearson_raw": None,
             "pearson": None, "adjustment": None, "spearman": None, "p_value": None,
-            "q_value": None, "verdict": "derived", "reason": "same_family"}
+            "q_value": None, "verdict": "derived", "reason": reason}
 
 
 def _ranks(xs):
