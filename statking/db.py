@@ -106,12 +106,18 @@ def _migration_4_pearson_adjusted(conn):
     conn.execute("ALTER TABLE snapshot_results ADD COLUMN pearson REAL")
 
 
+def _migration_5_adjustment(conn):
+    """How the Series were adjusted for this Hypothesis: detrend_deseason or differenced."""
+    conn.execute("ALTER TABLE snapshot_results ADD COLUMN adjustment TEXT")
+
+
 # (version, function) applied in order, once each. Append only; never edit a shipped migration.
 MIGRATIONS = [
     (1, _migration_1_baseline),
     (2, _migration_2_snapshots),
     (3, _migration_3_q_value),
     (4, _migration_4_pearson_adjusted),
+    (5, _migration_5_adjustment),
 ]
 
 

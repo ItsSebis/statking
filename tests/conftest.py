@@ -1,4 +1,5 @@
 """Synthetic Series fixtures. All generators take a fixed seed so tests are deterministic."""
+import math
 import random
 from datetime import date, timedelta
 
@@ -73,3 +74,10 @@ def lagged_walks(seed, lag, n=200, strength=0.9):
         a.append(xa)
         b.append(xb)
     return a, b
+
+
+def trended(seed, n=200, slope=1.0, season=None, period=7, noise=1.0):
+    """Linear trend (+ optional seasonal sine) + white noise: independent across seeds, shares only trend/season."""
+    rng = random.Random(seed)
+    return [slope * t + (season * math.sin(2 * math.pi * t / period) if season else 0) + rng.gauss(0, noise)
+            for t in range(n)]

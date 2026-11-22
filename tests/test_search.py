@@ -1,10 +1,11 @@
 import random
+from datetime import date, timedelta
 
 import pytest
 
 from statking.search import latest_snapshot, run_search
 
-from conftest import ar1_walk, lagged_walks, random_walk, related_walks
+from conftest import ar1_walk, put_series, lagged_walks, random_walk, related_walks, trended
 
 
 def verdicts(snapshot):
@@ -167,3 +168,51 @@ def test_invalid_or_duplicate_lag_params(conn, seed_series):
         with pytest.raises(ValueError):
             run_search(conn, bad)
     assert run_search(conn, {"lags": [1, 0, 1]})["hypotheses"] == 2
+
+
+def only(snap):
+    (r,) = snap["results"]
+    return r
+
+
+def test_series_sharing_only_a_trend_are_a_trend_driven_coincidence(conn, seed_series):
+    seed_series(test__a=trended(1, slope=1.0), test__b=trended(2, slope=2.0))
+
+    r = only(run_search(conn))
+
+    assert r["pearson_raw"] > 0.95  # Raw Correlation is stored and looks like a real relationship
+    assert r["verdict"] == "coincidence"
+    assert r["reason"] == "trend_driven"
+    assert r["adjustment"] == "detrend_deseason"
+
+
+def test_series_sharing_only_seasonality_are_a_seasonality_driven_coincidence(conn, seed_series):
+    seed_series(test__a=trended(1, slope=0, season=5), test__b=trended(2, slope=0, season=5))
+
+    r = only(run_search(conn))
+
+    assert r["pearson_raw"] > 0.8
+    assert (r["verdict"], r["reason"]) == ("coincidence", "seasonality_driven")
+
+
+def test_genuine_relationship_survives_trend_and_seasonality(conn, seed_series):
+    a, b = related_walks(seed=1, strength=0.9)
+    shared = trended(5, slope=0.5, season=4, noise=0)
+    seed_series(test__a=[x + s for x, s in zip(a, shared)], test__b=[x + s for x, s in zip(b, shared)])
+
+    r = only(run_search(conn))
+
+    assert r["verdict"] == "real"
+    assert r["adjustment"] == "detrend_deseason"
+
+
+def test_gappy_history_falls_back_to_differencing(conn, seed_series):
+    a, b = related_walks(seed=1, n=60)
+    for name, vals in (("test.a", a), ("test.b", b)):
+        put_series(conn, name, vals[:30])
+        put_series(conn, name, vals[31:], start=date(2024, 1, 1) + timedelta(days=31))  # day 30 missing
+
+    r = only(run_search(conn, {"min_buckets": 20}))
+
+    assert r["adjustment"] == "differenced"
+    assert r["verdict"] == "real"

@@ -1,7 +1,8 @@
 """The Search: test every Hypothesis (Series pair) and judge it on Adjusted Series.
 
 Single entry point: run_search(conn, params) -> Snapshot. Every pair is tested at each Lag in
-params['lags'] (or -max_lag..max_lag); each (pair, Lag) is one Hypothesis. First differencing,
+params['lags'] (or -max_lag..max_lag); each (pair, Lag) is one Hypothesis. Series are adjusted
+for trend and seasonality (detrend/deseason where history allows, first differencing otherwise),
 Spearman with a block-bootstrap p-value (Pearson stored as a secondary number),
 Benjamini-Hochberg FDR correction over the whole Search.
 Later slices add Stability and Derived Pairs."""
@@ -11,7 +12,7 @@ import random
 from itertools import combinations
 from operator import itemgetter
 
-from . import correlate, db
+from . import adjust, correlate, db
 
 DEFAULT_PARAMS = {
     "alpha": 0.01,         # false-discovery rate the Search controls (Benjamini-Hochberg)
@@ -19,6 +20,7 @@ DEFAULT_PARAMS = {
     "lags": [0],           # Lags (in Resolution buckets, b read `lag` after a) tested for every pair
     "seed": 0,             # fixes the bootstrap resamples: same data + seed -> identical p-values
     "bootstrap_samples": 300,
+    "strong_raw": 0.5,     # |Raw Correlation| from which a non-Real pair is blamed on trend/seasonality
 }
 
 
@@ -72,14 +74,28 @@ def _p_value(xs, ys, rho, resamplers):
     return math.erfc(abs(rho) / (se * math.sqrt(2)))
 
 
+def _coincidence_reason(raw, ta, tb, res, lag, params):
+    """Why a non-Real pair looked related in Raw form: seasonality (still strongly correlated once the
+    trend is removed), else trend; "not_significant" when the Raw Correlation was never strong."""
+    if raw is None or abs(raw) < params["strong_raw"]:
+        return "not_significant"
+    if ta is not None:
+        xs, ys, _ = correlate.align_buckets(ta, tb, res, lag)
+        r = correlate.pearson(xs, ys)
+        if r is not None and abs(r) >= params["strong_raw"]:
+            return "seasonality_driven"
+    return "trend_driven"
+
+
 def _judge(conn_cache, a, b, lag, params):
     res = max(conn_cache["res"][a], conn_cache["res"][b], key=correlate.ORDER.index)
     da, db_ = conn_cache["buckets"](a, res), conn_cache["buckets"](b, res)
     xs, ys, _ = correlate.align_buckets(da, db_, res, lag)
     raw = correlate.pearson(xs, ys)
     out = {"series_a": a, "series_b": b, "lag": lag, "res": res, "n": len(xs),
-           "pearson_raw": raw, "pearson": None, "spearman": None, "p_value": None}
-    dx, dy = correlate.differenced(da, res), correlate.differenced(db_, res)
+           "pearson_raw": raw, "pearson": None, "adjustment": None, "spearman": None, "p_value": None}
+    dx, dy, method, ta, tb = adjust.adjust_pair(da, db_, res)
+    out["adjustment"] = method
     xs, ys, _ = correlate.align_buckets(dx, dy, res, lag)
     out["n"] = len(xs)
     rho = spearman(xs, ys) if len(xs) >= 3 else None
@@ -89,7 +105,7 @@ def _judge(conn_cache, a, b, lag, params):
     out = {**out, "spearman": rho, "pearson": correlate.pearson(xs, ys), "p_value": p}
     if p is None:  # degenerate null (constant resamples): untestable, not "not significant"
         return {**out, "verdict": "too_little_data", "reason": "untestable"}
-    return {**out, "verdict": "coincidence", "reason": "not_significant"}
+    return {**out, "verdict": "coincidence", "reason": _coincidence_reason(raw, ta, tb, res, lag, params)}
 
 
 def _apply_fdr(results, alpha):
@@ -149,9 +165,9 @@ def run_search(conn, params=None):
     sid = cur.lastrowid
     conn.executemany(
         """INSERT INTO snapshot_results (snapshot_id, series_a, series_b, lag, res, n, spearman,
-           pearson_raw, pearson, p_value, q_value, verdict, reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           pearson_raw, pearson, p_value, q_value, verdict, reason, adjustment) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         [(sid, r["series_a"], r["series_b"], r["lag"], r["res"], r["n"], r["spearman"],
-          r["pearson_raw"], r["pearson"], r["p_value"], r["q_value"], r["verdict"], r["reason"]) for r in results])
+          r["pearson_raw"], r["pearson"], r["p_value"], r["q_value"], r["verdict"], r["reason"], r["adjustment"]) for r in results])
     conn.commit()
     return latest_snapshot(conn, sid)
 
@@ -163,7 +179,7 @@ def latest_snapshot(conn, snapshot_id=None):
     if row is None:
         return None
     rows = conn.execute(
-        """SELECT series_a, series_b, lag, res, n, spearman, pearson_raw, pearson, p_value, q_value, verdict, reason
+        """SELECT series_a, series_b, lag, res, n, spearman, pearson_raw, pearson, p_value, q_value, verdict, reason, adjustment
            FROM snapshot_results WHERE snapshot_id=?
            ORDER BY (verdict='real') DESC, ABS(spearman) DESC""", (row["id"],)).fetchall()
     return {"id": row["id"], "ts": row["ts"], "params": json.loads(row["params"]),
