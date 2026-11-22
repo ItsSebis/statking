@@ -28,16 +28,14 @@ DEFAULT_PARAMS = {
 }
 
 
-# Series-name prefix -> number of leading dotted segments that identify the Family.
-# Only prefixes whose Series are mechanically related are listed (weather.* / wiki.* / chess.* /
-# steam.* Series under one prefix are independent measures, not derivations of each other). Slice 2 makes Families explicit per Source.
-FAMILY_SEGMENTS = {}  # Sources declare their own (rent: wg_gesucht.FAMILY)
+# Resolutions a result can carry: the Series ones plus "place" (Across-places Hypotheses have no time axis).
+RESOLUTIONS = [*correlate.ORDER, "place"]
 
 
 def family(name):
     """The Family a Series belongs to (e.g. rent.kiel.wg), or None if it is not in one."""
     parts = name.split(".")
-    n = FAMILY_SEGMENTS.get(parts[0]) or sources.family_segments().get(parts[0])
+    n = sources.family_segments().get(parts[0])
     return ".".join(parts[:n]) if n and len(parts) > n else None
 
 
@@ -138,11 +136,23 @@ def _judge(conn_cache, a, b, lag, params):
     return {**out, "verdict": "coincidence", "reason": _coincidence_reason(raw, ta, tb, res, lag, params)}
 
 
-def _latest_by_place(conn, metric):
-    """A Place Metric's most recent snapshot across Places: {place: value} at its latest timestamp."""
-    by_place = db.read_place_metric(conn, metric)
-    latest = max((ts for series in by_place.values() for ts in series), default=None)
-    return {p: series[latest] for p, series in by_place.items() if series.get(latest) is not None}
+def _by_ts(conn, metric):
+    """A Place Metric as {ts: {place: value}} (missing values dropped)."""
+    out = {}
+    for place, series in db.read_place_metric(conn, metric).items():
+        for ts, v in series.items():
+            if v is not None:
+                out.setdefault(ts, {})[place] = v
+    return out
+
+
+def _common_snapshot(ma, mb):
+    """The two Place Metrics' values per Place at the latest timestamp both have: (va, vb)."""
+    common = ma.keys() & mb.keys()
+    if not common:
+        return {}, {}
+    ts = max(common)
+    return ma[ts], mb[ts]
 
 
 def _judge_places(a, b, va, vb, params):
@@ -251,8 +261,9 @@ def run_search(conn, params=None):
                for a, b in combinations(names, 2) for lag in params["lags"]]
     for r in results:
         r.setdefault("kind", "over_time")
-    metrics = {m: _latest_by_place(conn, m) for m in db.place_metric_names(conn)}
-    results += [_judge_places(a, b, metrics[a], metrics[b], params) for a, b in combinations(sorted(metrics), 2)]
+    metrics = {m: _by_ts(conn, m) for m in db.place_metric_names(conn)}
+    results += [_judge_places(a, b, *_common_snapshot(metrics[a], metrics[b]), params)
+                for a, b in combinations(sorted(metrics), 2)]
     hypotheses = [r for r in results if r["verdict"] != "derived"]
     _apply_fdr(hypotheses, params["alpha"])
     _apply_stability(hypotheses, params, resamplers)
@@ -276,8 +287,8 @@ def latest_snapshot(conn, snapshot_id=None, review_state=None, source=None, res=
     name) and by Resolution."""
     if review_state is not None and review_state not in review.STATES:
         raise ValueError(f"review_state must be one of {', '.join(review.STATES)}")
-    if res is not None and res not in correlate.ORDER:
-        raise ValueError(f"res must be one of {', '.join(correlate.ORDER)}")
+    if res is not None and res not in RESOLUTIONS:
+        raise ValueError(f"res must be one of {', '.join(RESOLUTIONS)}")
     row = (conn.execute("SELECT * FROM snapshots WHERE id=?", (snapshot_id,)).fetchone() if snapshot_id
            else conn.execute("SELECT * FROM snapshots ORDER BY id DESC LIMIT 1").fetchone())
     if row is None:

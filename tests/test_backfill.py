@@ -71,3 +71,24 @@ def test_source_without_declared_range_gets_params_untouched(conn):
     src, seen = _recording_source(None)
     jobs._source_job(src, SourceConfig(12, {"k": 1}))(conn)
     assert seen[0] == {"k": 1}
+
+
+def test_place_metric_only_source_counts_as_registered(conn):
+    from statking import db
+    src, seen = _recording_source()
+    src.collect = lambda c, p: seen.append(dict(p)) or []
+    db.put_place_metrics(conn, [("bf.pop", "kiel", None, "2024-01-01", 1.0)])
+    jobs._source_job(src, SourceConfig(12, {}))(conn)
+    assert "backfill_from" not in seen[0]
+
+
+def test_successful_empty_run_does_not_backfill_again_but_failed_one_does(conn):
+    src, seen = _recording_source()
+    src.collect = lambda c, p: seen.append(dict(p)) or []
+    job = jobs._source_job(src, SourceConfig(12, {}))
+    job(conn)
+    conn.execute("INSERT OR REPLACE INTO job_runs VALUES ('bf', 'x', 0, 'boom')")
+    job(conn)
+    conn.execute("INSERT OR REPLACE INTO job_runs VALUES ('bf', 'x', 1, NULL)")
+    job(conn)
+    assert ["backfill_from" in s for s in seen] == [True, True, False]

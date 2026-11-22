@@ -207,3 +207,15 @@ def test_last_run_persistence_still_prevents_extra_scrapes(conn, tmp_path, monke
     _schedule(tmp_path, monkeypatch, "wiki", {"articles": []}, interval=24)
     jobs.run_due(conn, ["wiki"], force=True)
     assert not jobs.due(conn, "wiki")
+
+
+def test_family_segments_are_cached_until_reset(monkeypatch):
+    calls = []
+    real = sources.discover
+    monkeypatch.setattr(sources, "discover", lambda *a: calls.append(1) or real(*a))
+    sources.reset_family_segments()
+    sources.family_segments(); sources.family_segments()
+    assert len(calls) == 1
+    sources.reset_family_segments()
+    sources.family_segments()
+    assert len(calls) == 2

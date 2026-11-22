@@ -131,7 +131,7 @@ def corr(a: str, b: str, start: Optional[str] = None, end: Optional[str] = None,
 
 @app.get("/api/health")
 def source_health():
-    """Source Health: last success and consecutive failures per Source/job."""
+    """Source Health: last success and consecutive failures per discovered Source (the Search job has none)."""
     return [{"source": h.pop("source"), **h} for h in health.all_health(db.connect(DB_PATH))]
 
 

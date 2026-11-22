@@ -14,7 +14,7 @@ def cmd_scrape(args):
     for city in args.city or cities.enabled():
         for cat in args.categories or cities.CITIES[city]["categories"]:
             print(f"scraping wg-gesucht {city} [{cat}] ...")
-            items, complete = wg_gesucht.scrape(city, cat)
+            items, complete = wg_gesucht.scrape(city, cat, max_pages=int(os.environ["RENT_MAX_PAGES"]) if "RENT_MAX_PAGES" in os.environ else None)
             new, gone = db.save_run(conn, "wg-gesucht", cat, items, complete, city)
             print(f"  {len(items)} listings, {new} new, {gone} gone, complete={complete}")
 

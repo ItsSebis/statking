@@ -18,6 +18,7 @@ def job_search(conn):
 JOBS = {
     "search": (job_search, 24, "SEARCH_INTERVAL_HOURS"),  # nightly; the Snapshots are the history
 }
+SOURCE_JOBS = set()  # names of JOBS entries that are discovered Sources: only those have Source Health
 
 
 def _source_job(source, cfg):
@@ -33,6 +34,7 @@ def register_sources():
     for name, src in sources.discover().items():
         if name in cfg:
             JOBS[name] = (_source_job(src, cfg[name]), cfg[name].interval_hours, None)
+            SOURCE_JOBS.add(name)
 
 
 register_sources()
@@ -52,11 +54,13 @@ def run_job(conn, name):
     try:
         fn(conn)
         conn.execute("INSERT OR REPLACE INTO job_runs VALUES (?,?,?,?)", (name, db.now(), 1, None))
-        health.record(conn, name, True)
+        if name in SOURCE_JOBS:
+            health.record(conn, name, True)
     except Exception as e:  # one failing source must not stop the others
         print(f"{name} failed: {e!r}")
         conn.execute("INSERT OR REPLACE INTO job_runs VALUES (?,?,?,?)", (name, db.now(), 0, repr(e)[:300]))
-        health.record(conn, name, False, repr(e)[:300])
+        if name in SOURCE_JOBS:
+            health.record(conn, name, False, repr(e)[:300])
     conn.commit()
 
 
