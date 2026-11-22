@@ -1,8 +1,10 @@
 import random
 
+import pytest
+
 from statking.search import latest_snapshot, run_search
 
-from conftest import random_walk, related_walks
+from conftest import ar1_walk, random_walk, related_walks
 
 
 def verdicts(snapshot):
@@ -80,3 +82,46 @@ def test_planted_relationship_survives_correction_among_many_hypotheses(conn, se
     assert snap["hypotheses"] == 190
     assert verdicts(snap)[("test.a", "test.b")] == "real"
     assert snap["real_count"] == 1
+
+
+def test_autocorrelated_but_independent_series_are_not_marked_real(conn, seed_series):
+    # AR(1) changes (phi=0.8) inflate a naive test's variance ~4x: the naive p-value marks 4 of
+    # these 28 independent pairs Real. Block-bootstrap p-values must not.
+    rng = random.Random(1)
+    seed_series(**{f"ar__{i}": ar1_walk(rng, 200) for i in range(8)})
+
+    snap = run_search(conn)
+
+    assert snap["hypotheses"] == 28
+    assert snap["real_count"] == 0
+
+
+def test_p_values_are_deterministic_for_a_fixed_seed(conn, seed_series):
+    a, b = related_walks(seed=1, strength=0.3)
+    seed_series(test__a=a, test__b=b)
+
+    first = run_search(conn, {"seed": 5})["results"][0]["p_value"]
+    again = run_search(conn, {"seed": 5})["results"][0]["p_value"]
+    other = run_search(conn, {"seed": 6})["results"][0]["p_value"]
+
+    assert first == again
+    assert first != other
+
+
+def test_default_seed_is_fixed_so_unseeded_searches_repeat(conn, seed_series):
+    a, b = related_walks(seed=1, strength=0.3)
+    seed_series(test__a=a, test__b=b)
+
+    assert run_search(conn)["results"][0]["p_value"] == run_search(conn)["results"][0]["p_value"]
+
+
+def test_pearson_on_adjusted_series_is_stored_next_to_spearman(conn, seed_series):
+    a = random_walk(random.Random(4), 200)
+    seed_series(test__a=a, test__b=[3 * v + 1 for v in a])  # b's changes are exactly 3x a's
+
+    stored = latest_snapshot(conn, run_search(conn)["id"])
+    (r,) = stored["results"]
+
+    assert r["pearson"] == pytest.approx(1.0)
+    assert r["spearman"] == pytest.approx(1.0)
+    assert r["pearson_raw"] == pytest.approx(1.0)

@@ -226,8 +226,8 @@ function renderSearch(s) {
   $("#searchmeta").textContent = `${s.ts} · ${s.hypotheses} Hypothesen getestet (FDR-korrigiert über alle) · ${s.real_count} real`;
   const f = x => x == null ? "–" : x.toFixed(3);
   const esc = t => String(t).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-  $("#searchres").innerHTML = "<tr><th>Urteil</th><th>Serie A</th><th>Serie B</th><th>Lag</th><th>n</th><th>Spearman (bereinigt)</th><th>Pearson (roh)</th><th>p</th><th>q (FDR)</th></tr>" +
-    s.results.map(r => `<tr><td class="${r.verdict === "real" ? "v-real" : ""}">${VERDICT[r.verdict] || r.verdict}</td><td>${esc(r.series_a)}</td><td>${esc(r.series_b)}</td><td>${r.lag}</td><td>${r.n}</td><td>${f(r.spearman)}</td><td>${f(r.pearson_raw)}</td><td>${r.p_value == null ? "–" : r.p_value.toExponential(1)}</td><td>${r.q_value == null ? "–" : r.q_value.toExponential(1)}</td></tr>`).join("");
+  $("#searchres").innerHTML = "<tr><th>Urteil</th><th>Serie A</th><th>Serie B</th><th>Lag</th><th>n</th><th>Spearman (bereinigt)</th><th>Pearson (bereinigt)</th><th>Pearson (roh)</th><th>p</th><th>q (FDR)</th></tr>" +
+    s.results.map(r => `<tr><td class="${r.verdict === "real" ? "v-real" : ""}">${VERDICT[r.verdict] || r.verdict}</td><td>${esc(r.series_a)}</td><td>${esc(r.series_b)}</td><td>${r.lag}</td><td>${r.n}</td><td>${f(r.spearman)}</td><td>${f(r.pearson)}</td><td>${f(r.pearson_raw)}</td><td>${r.p_value == null ? "–" : r.p_value.toExponential(1)}</td><td>${r.q_value == null ? "–" : r.q_value.toExponential(1)}</td></tr>`).join("");
 }
 async function loadSearch() { renderSearch(await (await fetch("/api/search/latest")).json()); }
 $("#runsearch").onclick = async () => {

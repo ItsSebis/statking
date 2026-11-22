@@ -101,11 +101,17 @@ def _migration_3_q_value(conn):
     conn.execute("ALTER TABLE snapshot_results ADD COLUMN q_value REAL")
 
 
+def _migration_4_pearson_adjusted(conn):
+    """Pearson on the Adjusted Series, stored as a secondary number next to Spearman."""
+    conn.execute("ALTER TABLE snapshot_results ADD COLUMN pearson REAL")
+
+
 # (version, function) applied in order, once each. Append only; never edit a shipped migration.
 MIGRATIONS = [
     (1, _migration_1_baseline),
     (2, _migration_2_snapshots),
     (3, _migration_3_q_value),
+    (4, _migration_4_pearson_adjusted),
 ]
 
 

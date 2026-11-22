@@ -50,3 +50,13 @@ def seed_series(conn):
         for name, values in series.items():
             put_series(conn, name.replace("__", "."), values)
     return _seed
+
+
+def ar1_walk(rng, n, phi=0.8):
+    """Random walk whose daily *changes* are AR(1): autocorrelated Adjusted Series, independent across calls."""
+    d, x, out = 0.0, 0.0, []
+    for _ in range(n):
+        d = phi * d + rng.gauss(0, 1)
+        x += d
+        out.append(x)
+    return out

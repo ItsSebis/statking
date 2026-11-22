@@ -1,11 +1,14 @@
 """The Search: test every Hypothesis (Series pair) and judge it on Adjusted Series.
 
 Single entry point: run_search(conn, params) -> Snapshot. Walking-skeleton scope: lag 0 only,
-first differencing, Spearman, Benjamini-Hochberg FDR correction over the whole Search.
+first differencing, Spearman with a block-bootstrap p-value (Pearson stored as a secondary
+number), Benjamini-Hochberg FDR correction over the whole Search.
 Later slices add Stability, Derived Pairs, more Lags."""
 import json
 import math
+import random
 from itertools import combinations
+from operator import itemgetter
 
 from . import correlate, db
 
@@ -13,6 +16,8 @@ DEFAULT_PARAMS = {
     "alpha": 0.01,         # false-discovery rate the Search controls (Benjamini-Hochberg)
     "min_buckets": 30,     # fewer aligned buckets than this -> Too Little Data
     "lags": [0],
+    "seed": 0,             # fixes the bootstrap resamples: same data + seed -> identical p-values
+    "bootstrap_samples": 300,
 }
 
 
@@ -34,11 +39,36 @@ def spearman(xs, ys):
     return correlate.pearson(_ranks(xs), _ranks(ys))
 
 
-def _p_value(rho, n):
-    """Two-sided p from the Fisher z approximation (Spearman variance inflation 1.06)."""
-    rho = max(-0.999999, min(0.999999, rho))
-    z = math.atanh(rho) * math.sqrt((n - 3) / 1.06)
-    return math.erfc(abs(z) / math.sqrt(2))
+def _resamplers(n, params):
+    """Paired circular block-bootstrap index getters for series of length n, fixed by (seed, n).
+    The block length ~sqrt(n) keeps short-range autocorrelation inside each block."""
+    rng = random.Random(f"{params['seed']}:{n}")
+    block = max(1, math.ceil(math.sqrt(n)))
+
+    def one():
+        idx = []
+        while len(idx) < n:
+            start = rng.randrange(n)
+            idx.extend((start + k) % n for k in range(block))
+        return itemgetter(*idx[:n])
+
+    return [(one(), one()) for _ in range(params["bootstrap_samples"])]
+
+
+def _p_value(xs, ys, rho, resamplers):
+    """Two-sided p for rho against the null "the Series are independent but each keeps its own
+    autocorrelation". Resampling x and y *independently* in blocks destroys any cross-relationship
+    and preserves autocorrelation; the spread of rho over those resamples is the null standard error.
+    A normal tail on that standard error (rather than a resample count) lets p go below 1/B, which
+    the FDR correction over many Hypotheses needs."""
+    rx, ry = _ranks(xs), _ranks(ys)
+    null = [r for gx, gy in resamplers if (r := correlate.pearson(gx(rx), gy(ry))) is not None]
+    if not null:
+        return None
+    se = math.sqrt(sum(r * r for r in null) / len(null))  # null is centred on 0
+    if se == 0:
+        return None
+    return math.erfc(abs(rho) / (se * math.sqrt(2)))
 
 
 def _judge(conn_cache, a, b, lag, params):
@@ -47,15 +77,18 @@ def _judge(conn_cache, a, b, lag, params):
     xs, ys, _ = correlate.align_buckets(da, db_, res, lag)
     raw = correlate.pearson(xs, ys)
     out = {"series_a": a, "series_b": b, "lag": lag, "res": res, "n": len(xs),
-           "pearson_raw": raw, "spearman": None, "p_value": None}
+           "pearson_raw": raw, "pearson": None, "spearman": None, "p_value": None}
     dx, dy = correlate.differenced(da, res), correlate.differenced(db_, res)
     xs, ys, _ = correlate.align_buckets(dx, dy, res, lag)
     out["n"] = len(xs)
     rho = spearman(xs, ys) if len(xs) >= 3 else None
     if len(xs) < params["min_buckets"] or rho is None:
         return {**out, "verdict": "too_little_data", "reason": "too_few_buckets"}
-    return {**out, "spearman": rho, "p_value": _p_value(rho, len(xs)), "verdict": "coincidence",
-            "reason": "not_significant"}
+    p = _p_value(xs, ys, rho, conn_cache["resamplers"](len(xs)))
+    out = {**out, "spearman": rho, "pearson": correlate.pearson(xs, ys), "p_value": p}
+    if p is None:  # degenerate null (constant resamples): untestable, not "not significant"
+        return {**out, "verdict": "too_little_data", "reason": "untestable"}
+    return {**out, "verdict": "coincidence", "reason": "not_significant"}
 
 
 def _apply_fdr(results, alpha):
@@ -87,6 +120,14 @@ def run_search(conn, params=None):
         return cache["b"][(s, res)]
 
     cache["buckets"] = buckets
+    resampler_cache = {}
+
+    def resamplers(n):
+        if n not in resampler_cache:
+            resampler_cache[n] = _resamplers(n, params)
+        return resampler_cache[n]
+
+    cache["resamplers"] = resamplers
     results = [_judge(cache, a, b, lag, params)
                for a, b in combinations(names, 2) for lag in params["lags"]]
     _apply_fdr(results, params["alpha"])
@@ -96,9 +137,9 @@ def run_search(conn, params=None):
     sid = cur.lastrowid
     conn.executemany(
         """INSERT INTO snapshot_results (snapshot_id, series_a, series_b, lag, res, n, spearman,
-           pearson_raw, p_value, q_value, verdict, reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+           pearson_raw, pearson, p_value, q_value, verdict, reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         [(sid, r["series_a"], r["series_b"], r["lag"], r["res"], r["n"], r["spearman"],
-          r["pearson_raw"], r["p_value"], r["q_value"], r["verdict"], r["reason"]) for r in results])
+          r["pearson_raw"], r["pearson"], r["p_value"], r["q_value"], r["verdict"], r["reason"]) for r in results])
     conn.commit()
     return latest_snapshot(conn, sid)
 
@@ -110,7 +151,7 @@ def latest_snapshot(conn, snapshot_id=None):
     if row is None:
         return None
     rows = conn.execute(
-        """SELECT series_a, series_b, lag, res, n, spearman, pearson_raw, p_value, q_value, verdict, reason
+        """SELECT series_a, series_b, lag, res, n, spearman, pearson_raw, pearson, p_value, q_value, verdict, reason
            FROM snapshot_results WHERE snapshot_id=?
            ORDER BY (verdict='real') DESC, ABS(spearman) DESC""", (row["id"],)).fetchall()
     return {"id": row["id"], "ts": row["ts"], "params": json.loads(row["params"]),
