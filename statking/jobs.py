@@ -4,7 +4,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-from . import db, search, sources
+from . import db, health, search, sources
 
 H = lambda name, default: float(os.environ.get(name, default))
 
@@ -22,7 +22,7 @@ JOBS = {
 
 def _source_job(source, cfg):
     def job(conn):
-        db.put_metrics(conn, source.collect(conn, cfg.params))
+        db.put_metrics(conn, source.collect(conn, sources.run_params(conn, source, cfg.params)))
         conn.commit()
     return job
 
@@ -52,9 +52,11 @@ def run_job(conn, name):
     try:
         fn(conn)
         conn.execute("INSERT OR REPLACE INTO job_runs VALUES (?,?,?,?)", (name, db.now(), 1, None))
+        health.record(conn, name, True)
     except Exception as e:  # one failing source must not stop the others
         print(f"{name} failed: {e!r}")
         conn.execute("INSERT OR REPLACE INTO job_runs VALUES (?,?,?,?)", (name, db.now(), 0, repr(e)[:300]))
+        health.record(conn, name, False, repr(e)[:300])
     conn.commit()
 
 

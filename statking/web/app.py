@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .. import cities, correlate, db, geo, review, search, steam_job
+from .. import cities, correlate, db, geo, health, review, search, steam_job
 
 DB_PATH = os.environ.get("STATKING_DB", "data/statking.db")
 STATIC = os.path.join(os.path.dirname(__file__), "static")
@@ -127,6 +127,12 @@ def corr(a: str, b: str, start: Optional[str] = None, end: Optional[str] = None,
     step = max(1, len(xs) // 600)  # cap scatter points
     return {"r": None if r0 is None else round(r0, 4), "n": len(xs), "unit": res, "scan": scan,
             "points": [{"x": round(x, 3), "y": round(y, 3), "d": k} for x, y, k in list(zip(xs, ys, ks))[::step]]}
+
+
+@app.get("/api/health")
+def source_health():
+    """Source Health: last success and consecutive failures per Source/job."""
+    return [{"source": h.pop("source"), **h} for h in health.all_health(db.connect(DB_PATH))]
 
 
 @app.get("/api/search/latest")
