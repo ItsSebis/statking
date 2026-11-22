@@ -14,7 +14,7 @@ import random
 from itertools import combinations
 from operator import itemgetter
 
-from . import adjust, correlate, db
+from . import adjust, correlate, db, review
 
 DEFAULT_PARAMS = {
     "alpha": 0.01,         # false-discovery rate the Search controls (Benjamini-Hochberg)
@@ -231,16 +231,23 @@ def run_search(conn, params=None):
     return latest_snapshot(conn, sid)
 
 
-def latest_snapshot(conn, snapshot_id=None):
-    """The given (or most recent) Snapshot with its per-Hypothesis results, or None."""
+def latest_snapshot(conn, snapshot_id=None, review_state=None):
+    """The given (or most recent) Snapshot with its per-Hypothesis results, or None.
+    Each result carries the pair's current Review State (joined live, not stored in the Snapshot)."""
+    if review_state is not None and review_state not in review.STATES:
+        raise ValueError(f"review_state must be one of {', '.join(review.STATES)}")
     row = (conn.execute("SELECT * FROM snapshots WHERE id=?", (snapshot_id,)).fetchone() if snapshot_id
            else conn.execute("SELECT * FROM snapshots ORDER BY id DESC LIMIT 1").fetchone())
     if row is None:
         return None
     rows = conn.execute(
-        """SELECT series_a, series_b, lag, res, n, spearman, pearson_raw, pearson, p_value, q_value, verdict, reason, adjustment
-           FROM snapshot_results WHERE snapshot_id=?
+        """SELECT s.series_a, s.series_b, s.lag, s.res, s.n, s.spearman, s.pearson_raw, s.pearson, s.p_value,
+                  s.q_value, s.verdict, s.reason, s.adjustment,
+                  COALESCE(v.state, 'unreviewed') AS review_state, v.note AS review_note
+           FROM snapshot_results s
+           LEFT JOIN pair_reviews v ON v.series_a=s.series_a AND v.series_b=s.series_b
+           WHERE s.snapshot_id=?
            ORDER BY (verdict='real') DESC, ABS(spearman) DESC""", (row["id"],)).fetchall()
+    results = [dict(r) for r in rows if review_state in (None, r["review_state"])]
     return {"id": row["id"], "ts": row["ts"], "params": json.loads(row["params"]),
-            "hypotheses": row["hypotheses"], "real_count": row["real_count"],
-            "results": [dict(r) for r in rows]}
+            "hypotheses": row["hypotheses"], "real_count": row["real_count"], "results": results}

@@ -4,11 +4,12 @@ import statistics
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
-from .. import cities, correlate, db, geo, search, steam_job
+from .. import cities, correlate, db, geo, review, search, steam_job
 
 DB_PATH = os.environ.get("STATKING_DB", "data/statking.db")
 STATIC = os.path.join(os.path.dirname(__file__), "static")
@@ -129,9 +130,30 @@ def corr(a: str, b: str, start: Optional[str] = None, end: Optional[str] = None,
 
 
 @app.get("/api/search/latest")
-def search_latest():
-    """Most recent Snapshot (parameters + every tested Hypothesis), or null before the first Search."""
-    return search.latest_snapshot(db.connect(DB_PATH))
+def search_latest(review_state: Optional[str] = None):
+    """Most recent Snapshot (parameters + every tested Hypothesis), or null before the first Search.
+    review_state narrows the results to unreviewed / confirmed / dismissed pairs."""
+    try:
+        return search.latest_snapshot(db.connect(DB_PATH), review_state=review_state)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class ReviewIn(BaseModel):
+    series_a: str
+    series_b: str
+    state: str
+    note: Optional[str] = None
+
+
+@app.put("/api/review")
+def review_set(body: ReviewIn):
+    """Set a pair's Review State (confirmed needs a note; unreviewed clears it)."""
+    try:
+        review.set_review(db.connect(DB_PATH), body.series_a, body.series_b, body.state, body.note)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
 
 
 @app.post("/api/search/run")

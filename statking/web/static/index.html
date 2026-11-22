@@ -115,6 +115,12 @@ td.n,th.n{text-align:right}
   <section id="search" class="view">
     <div class="row" style="margin-bottom:12px">
       <button class="run" id="runsearch">Jetzt suchen</button>
+      <select id="reviewfilter">
+        <option value="">Alle Paare</option>
+        <option value="unreviewed">Ungeprüft</option>
+        <option value="confirmed">Bestätigt</option>
+        <option value="dismissed">Verworfen</option>
+      </select>
       <span id="searchmeta"></span>
     </div>
     <table id="searchres"></table>
@@ -226,16 +232,38 @@ function renderSearch(s) {
   $("#searchmeta").textContent = `${s.ts} · ${s.hypotheses} Hypothesen getestet (FDR-korrigiert über alle) · ${s.real_count} real`;
   const f = x => x == null ? "–" : x.toFixed(3);
   const esc = t => String(t).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-  $("#searchres").innerHTML = "<tr><th>Urteil</th><th>Serie A</th><th>Serie B</th><th>Lag</th><th>n</th><th>Spearman (bereinigt)</th><th>Pearson (bereinigt)</th><th>Pearson (roh)</th><th>p</th><th>q (FDR)</th></tr>" +
-    s.results.map(r => `<tr><td class="${r.verdict === "real" ? "v-real" : ""}">${VERDICT[r.verdict] || r.verdict}</td><td>${esc(r.series_a)}</td><td>${esc(r.series_b)}</td><td>${r.lag}</td><td>${r.n}</td><td>${f(r.spearman)}</td><td>${f(r.pearson)}</td><td>${f(r.pearson_raw)}</td><td>${r.p_value == null ? "–" : r.p_value.toExponential(1)}</td><td>${r.q_value == null ? "–" : r.q_value.toExponential(1)}</td></tr>`).join("");
+  $("#searchres").innerHTML = "<tr><th>Urteil</th><th>Serie A</th><th>Serie B</th><th>Lag</th><th>n</th><th>Spearman (bereinigt)</th><th>Pearson (bereinigt)</th><th>Pearson (roh)</th><th>p</th><th>q (FDR)</th><th>Prüfung</th></tr>" +
+    s.results.map((r, i) => `<tr><td class="${r.verdict === "real" ? "v-real" : ""}">${VERDICT[r.verdict] || r.verdict}</td><td>${esc(r.series_a)}</td><td>${esc(r.series_b)}</td><td>${r.lag}</td><td>${r.n}</td><td>${f(r.spearman)}</td><td>${f(r.pearson)}</td><td>${f(r.pearson_raw)}</td><td>${r.p_value == null ? "–" : r.p_value.toExponential(1)}</td><td>${r.q_value == null ? "–" : r.q_value.toExponential(1)}</td><td>${reviewCell(r, i)}</td></tr>`).join("");
+  $("#searchres").querySelectorAll("select.review").forEach(sel => sel.onchange = () => setReview(s.results[+sel.dataset.i], sel.value));
 }
-async function loadSearch() { renderSearch(await (await fetch("/api/search/latest")).json()); }
+const REVIEW = {unreviewed:"Ungeprüft", confirmed:"Bestätigt", dismissed:"Verworfen"};
+function reviewCell(r, i) {
+  const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const opts = Object.entries(REVIEW).map(([k, v]) => `<option value="${k}"${k === r.review_state ? " selected" : ""}>${v}</option>`).join("");
+  return `<select class="review" data-i="${i}">${opts}</select>` + (r.review_note ? ` <span title="${esc(r.review_note)}">${esc(r.review_note)}</span>` : "");
+}
+async function setReview(r, state) {
+  let note = null;
+  if (state === "confirmed") {
+    note = prompt("Warum ist ein Mechanismus plausibel? (Notiz)", r.review_note || "");
+    if (!note || !note.trim()) return loadSearch();
+  }
+  const res = await fetch("/api/review", {method: "PUT", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({series_a: r.series_a, series_b: r.series_b, state, note})});
+  if (!res.ok) alert("Fehler: " + (await res.json()).detail);
+  loadSearch();
+}
+async function loadSearch() {
+  const f = $("#reviewfilter").value;
+  renderSearch(await (await fetch("/api/search/latest" + (f ? "?review_state=" + f : ""))).json());
+}
+$("#reviewfilter").onchange = loadSearch;
 $("#runsearch").onclick = async () => {
   const btn = $("#runsearch"); btn.disabled = true; btn.textContent = "Läuft …";
   try {
     const r = await fetch("/api/search/run", {method: "POST"});
     if (!r.ok) throw new Error("HTTP " + r.status);
-    renderSearch(await r.json());
+    await loadSearch();
   } catch (e) { $("#searchmeta").textContent = "Suche fehlgeschlagen: " + e.message; }
   finally { btn.disabled = false; btn.textContent = "Jetzt suchen"; }
 };

@@ -111,6 +111,13 @@ def _migration_5_adjustment(conn):
     conn.execute("ALTER TABLE snapshot_results ADD COLUMN adjustment TEXT")
 
 
+def _migration_6_pair_reviews(conn):
+    """Review State per pair, independent of Snapshots; no row means unreviewed."""
+    conn.execute("""CREATE TABLE pair_reviews (
+        series_a TEXT NOT NULL, series_b TEXT NOT NULL, state TEXT NOT NULL, note TEXT, ts TEXT NOT NULL,
+        PRIMARY KEY (series_a, series_b))""")
+
+
 # (version, function) applied in order, once each. Append only; never edit a shipped migration.
 MIGRATIONS = [
     (1, _migration_1_baseline),
@@ -118,6 +125,7 @@ MIGRATIONS = [
     (3, _migration_3_q_value),
     (4, _migration_4_pearson_adjusted),
     (5, _migration_5_adjustment),
+    (6, _migration_6_pair_reviews),
 ]
 
 

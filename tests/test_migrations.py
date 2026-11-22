@@ -68,3 +68,11 @@ def test_fresh_db_gets_no_backup(tmp_path):
     conn = db.connect(p)
     assert conn.execute("SELECT count(*) c FROM schema_migrations").fetchone()["c"] == len(db.MIGRATIONS)
     assert backups(p) == []
+
+
+def test_legacy_db_gets_pair_reviews_table(tmp_path):
+    p = tmp_path / "s.db"
+    make_legacy(p)
+    conn = db.connect(str(p))
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(pair_reviews)")}
+    assert {"series_a", "series_b", "state", "note"} <= cols
