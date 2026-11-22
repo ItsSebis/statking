@@ -1,5 +1,6 @@
 """SQLite storage. One row per listing; first_seen/last_seen give listing lifetime."""
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 
@@ -49,10 +50,6 @@ CREATE TABLE IF NOT EXISTS metrics (
 );
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS job_runs (job TEXT PRIMARY KEY, ts TEXT NOT NULL, ok INTEGER NOT NULL, note TEXT);
-CREATE TABLE IF NOT EXISTS district_metrics (
-    dataset TEXT NOT NULL, merkmal TEXT NOT NULL, district TEXT NOT NULL, ts TEXT NOT NULL, value REAL,
-    PRIMARY KEY (dataset, merkmal, district, ts)
-);
 CREATE TABLE IF NOT EXISTS chess_games (
     url TEXT PRIMARY KEY, end_time TEXT NOT NULL, time_class TEXT, color TEXT,
     result TEXT, my_rating INTEGER, opp_rating INTEGER
@@ -124,6 +121,48 @@ def _migration_7_source_health(conn):
         source TEXT PRIMARY KEY, last_success TEXT, consecutive_failures INTEGER NOT NULL DEFAULT 0, last_error TEXT)""")
 
 
+def _city_name(city):
+    from . import cities  # local import: keeps db importable without the registry at module load
+    return cities.CITIES.get(city, {}).get("name") or city.capitalize()
+
+
+def _ensure_place(conn, city, district=None):
+    """Place id: the city key ('kiel') or '<city>/<district>'. Creates the row (and the parent city) if missing."""
+    conn.execute("INSERT OR IGNORE INTO places (id,name,kind,parent_id) VALUES (?,?,'city',NULL)", (city, _city_name(city)))
+    if district is None:
+        return city
+    pid = f"{city}/{district}"
+    conn.execute("INSERT OR IGNORE INTO places (id,name,kind,parent_id) VALUES (?,?,'district',?)", (pid, district, city))
+    return pid
+
+
+def _migration_8_places(conn):
+    """Places (city/district hierarchy) + Place Metrics (metric, place, ts); replaces district_metrics and the
+    per-district rent Series (rent.<city>.<cat>.eur_m2.<District> -> metric rent.<cat>.eur_m2 at place <city>/<District>)."""
+    conn.executescript("""
+        CREATE TABLE places (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('city','district')),
+            parent_id TEXT REFERENCES places(id));
+        CREATE TABLE place_metrics (
+            metric TEXT NOT NULL, place TEXT NOT NULL REFERENCES places(id), ts TEXT NOT NULL, value REAL,
+            PRIMARY KEY (metric, place, ts));""")
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='district_metrics'").fetchone():
+        # Stadtteil datasets were Kiel-only
+        for dataset, merkmal, district, ts, value in conn.execute(
+                "SELECT dataset,merkmal,district,ts,value FROM district_metrics").fetchall():
+            conn.execute("INSERT OR REPLACE INTO place_metrics VALUES (?,?,?,?)",
+                         (f"{dataset}.{merkmal}", _ensure_place(conn, "kiel", district), ts, value))
+        conn.execute("DROP TABLE district_metrics")
+    pat = re.compile(r"^rent\.([^.]+)\.([^.]+)\.eur_m2\.(.+)$")
+    for series, ts, value in conn.execute("SELECT series,ts,value FROM metrics WHERE series LIKE 'rent.%.eur_m2.%'").fetchall():
+        m = pat.match(series)
+        if m:
+            city, cat, district = m.groups()
+            conn.execute("INSERT OR REPLACE INTO place_metrics VALUES (?,?,?,?)",
+                         (f"rent.{cat}.eur_m2", _ensure_place(conn, city, district), ts, value))
+            conn.execute("DELETE FROM metrics WHERE series=? AND ts=?", (series, ts))
+
+
 # (version, function) applied in order, once each. Append only; never edit a shipped migration.
 MIGRATIONS = [
     (1, _migration_1_baseline),
@@ -133,6 +172,7 @@ MIGRATIONS = [
     (5, _migration_5_adjustment),
     (6, _migration_6_pair_reviews),
     (7, _migration_7_source_health),
+    (8, _migration_8_places),
 ]
 
 
@@ -221,6 +261,42 @@ def put_metrics(conn, rows):
     conn.executemany("INSERT OR REPLACE INTO metrics VALUES (?,?,?)", list(rows))
 
 
+def put_place_metrics(conn, rows):
+    """rows: iterable of (metric, city, district_or_None, ts, value); district None means the city itself.
+    Creates the Places as needed. Idempotent."""
+    conn.executemany("INSERT OR REPLACE INTO place_metrics VALUES (?,?,?,?)",
+                     [(m, _ensure_place(conn, city, d), ts, v) for m, city, d, ts, v in rows])
+
+
+def read_place_metric(conn, metric, ts=None) -> dict:
+    """One Place Metric as {place_id: {ts: value}}; ts restricts to a single timestamp."""
+    q, args = "SELECT place, ts, value FROM place_metrics WHERE metric=?", [metric]
+    if ts is not None:
+        q, args = q + " AND ts=?", args + [ts]
+    out = {}
+    for r in conn.execute(q + " ORDER BY place, ts", args):
+        out.setdefault(r["place"], {})[r["ts"]] = r["value"]
+    return out
+
+
+def place_metric_names(conn, prefix="") -> list:
+    """Distinct Place Metric names (sorted), optionally only those starting with prefix."""
+    return [r[0] for r in conn.execute(
+        "SELECT DISTINCT metric FROM place_metrics WHERE substr(metric,1,?)=? ORDER BY metric", (len(prefix), prefix))]
+
+
+def places(conn, kind=None, parent=None) -> list:
+    """Places as dicts (id, name, kind, parent_id), optionally filtered by kind and/or parent city id."""
+    q, args, where = "SELECT id,name,kind,parent_id FROM places", [], []
+    if kind:
+        where.append("kind=?"); args.append(kind)
+    if parent:
+        where.append("parent_id=?"); args.append(parent)
+    if where:
+        q += " WHERE " + " AND ".join(where)
+    return [dict(r) for r in conn.execute(q + " ORDER BY id", args)]
+
+
 def record_rent_metrics(conn, source, category, ts, new, gone, city="kiel"):
     """Snapshot of the market at this scrape: city + per-district median EUR/m2."""
     from . import cities, geo  # local imports: geo imports db
@@ -234,12 +310,13 @@ def record_rent_metrics(conn, source, category, ts, new, gone, city="kiel"):
     if rows:
         out.append((f"{pre}.median_eur_m2", ts, statistics.median(r["price_eur"] / r["size_m2"] for r in rows)))
         out.append((f"{pre}.median_price", ts, statistics.median(r["price_eur"] for r in rows)))
-    by = {}
+    by, place_rows = {}, []
     for r in rows:
         d = geo.polygon_name(r["district"], polys, city)
         if d:
             by.setdefault(d, []).append(r["price_eur"] / r["size_m2"])
     for d, v in by.items():
         if len(v) >= 3:  # don't track districts from 1-2 listings
-            out.append((f"{pre}.eur_m2.{d}", ts, statistics.median(v)))
+            place_rows.append((f"rent.{category}.eur_m2", city, d, ts, statistics.median(v)))
     put_metrics(conn, out)
+    put_place_metrics(conn, place_rows)

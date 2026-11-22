@@ -10,6 +10,8 @@ import unicodedata
 
 import requests
 
+from .. import db
+
 NAME = "stat"  # Source interface: see statking/sources/__init__.py
 CKAN = "https://opendata.schleswig-holstein.de/api/3/action/package_show"
 UA = "statking/0.1 (personal research)"
@@ -27,7 +29,7 @@ DATASETS = {
     "nord.kiel.wohngebaeudebestand": ("wohngebaudebestand-nach-anzahl-der-wohnungen-in-kiel", "nord"),
     "nord.sh.studierende": ("studierende-in-schleswig-holstein-im-wintersemester", "nord"),
 }
-# Stadtteil-level datasets -> district_metrics (shown as map layers)
+# Stadtteil-level datasets -> Place Metrics (shown as map layers)
 DISTRICT_DATASETS = {
     "einwohner": ("einwohnerinnen-und-einwohner-in-den-kieler-stadtteilen", "Einwohner", "Personen"),
     "auslaender": ("auslanderinnen-und-auslander-in-den-kieler-stadtteilen", "Ausländer", "Personen"),
@@ -138,7 +140,7 @@ def parse_district(text):
 
 
 def collect(conn, params):
-    """stat.<dataset>.<column> Series; Stadtteil datasets go to district_metrics. One broken dataset must not block the rest."""
+    """stat.<dataset>.<column> Series; Stadtteil datasets go to Place Metrics. One broken dataset must not block the rest."""
     out = []
     for key, (cid, layout) in DATASETS.items():
         try:
@@ -153,7 +155,6 @@ def collect(conn, params):
         except Exception as e:
             print(f"stat[{key}] failed: {e!r}")
             continue
-        conn.executemany("INSERT OR REPLACE INTO district_metrics VALUES (?,?,?,?,?)",
-                         [(key, m, d, ts, v) for m, d, ts, v in pts])
+        db.put_place_metrics(conn, [(f"{key}.{m}", "kiel", d, ts, v) for m, d, ts, v in pts])
     print(f"stat: {len(out)} points")
     return out
