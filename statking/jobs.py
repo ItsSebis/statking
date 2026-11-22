@@ -4,8 +4,8 @@ import os
 import time
 from datetime import date, datetime, timedelta, timezone
 
-from . import cities, db, geo, search, steam_job
-from .sources import chess, opendata_sh, weather, wikipedia, wg_gesucht
+from . import cities, db, geo, search, sources, steam_job
+from .sources import chess, opendata_sh, wikipedia, wg_gesucht
 
 H = lambda name, default: float(os.environ.get(name, default))
 
@@ -30,40 +30,6 @@ def job_rent(conn):
 
 def job_steam(conn):
     steam_job.collect(conn)
-
-
-def station_for(conn, city):
-    """DWD station for a city: fixed override, cached lookup, or nearest station."""
-    if city in cities.WEATHER_STATION_OVERRIDE:
-        return cities.WEATHER_STATION_OVERRIDE[city]
-    row = conn.execute("SELECT value FROM kv WHERE key=?", (f"weather_station.{city}",)).fetchone()
-    if row:
-        return row[0]
-    c = cities.CITIES[city]
-    sid, name, dist = weather.nearest_station(c["lat"], c["lon"])
-    print(f"weather[{city}]: using {name} ({sid}), {dist / 1000:.0f} km away")
-    conn.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (f"weather_station.{city}", sid))
-    conn.commit()
-    return sid
-
-
-def job_weather(conn):
-    backfill = os.environ.get("WEATHER_BACKFILL_FROM", "2024-01-01")
-    today = date.today()
-    for name in cities.CITIES:
-        station = station_for(conn, name)
-        last = conn.execute("SELECT MAX(ts) FROM metrics WHERE series=?", (f"weather.{name}.temp_mean",)).fetchone()[0]
-        start = date.fromisoformat(last) - timedelta(days=1) if last else date.fromisoformat(backfill)
-        rows = []
-        while start <= today:
-            end = min(start + timedelta(days=89), today)
-            for day, v in weather.daily(weather.fetch_hourly(station, start.isoformat(), (end + timedelta(days=1)).isoformat()), today.isoformat()).items():
-                rows += [(f"weather.{name}.{k}", day, val) for k, val in v.items() if val is not None]
-            start = end + timedelta(days=1)
-            time.sleep(1)
-        db.put_metrics(conn, rows)
-        conn.commit()
-        print(f"weather[{name}]: {len(rows)} points")
 
 
 def job_wiki(conn):
@@ -137,12 +103,29 @@ def job_search(conn):
 JOBS = {
     "rent": (job_rent, 24, "RENT_INTERVAL_HOURS"),
     "steam": (job_steam, 0.25, "STEAM_INTERVAL_HOURS"),
-    "weather": (job_weather, 12, "WEATHER_INTERVAL_HOURS"),
     "wiki": (job_wiki, 24, "WIKI_INTERVAL_HOURS"),
     "chess": (job_chess, 6, "CHESS_INTERVAL_HOURS"),
     "stat": (job_stat, 168, "STAT_INTERVAL_HOURS"),  # yearly data, weekly check is plenty
     "search": (job_search, 24, "SEARCH_INTERVAL_HOURS"),  # nightly; the Snapshots are the history
 }
+
+
+def _source_job(source, cfg):
+    def job(conn):
+        db.put_metrics(conn, source.collect(conn, cfg.params))
+        conn.commit()
+    return job
+
+
+def register_sources():
+    """Schedule every discovered Source that the sources config file lists (interval + params from there)."""
+    cfg = sources.load_config()
+    for name, src in sources.discover().items():
+        if name in cfg:
+            JOBS[name] = (_source_job(src, cfg[name]), cfg[name].interval_hours, None)
+
+
+register_sources()
 
 
 def due(conn, name, force=False):
@@ -151,7 +134,7 @@ def due(conn, name, force=False):
     if force or row is None:
         return True
     age = (datetime.now(timezone.utc) - datetime.fromisoformat(row[0])).total_seconds()
-    return age >= H(env, default) * 3600
+    return age >= (H(env, default) if env else default) * 3600
 
 
 def run_job(conn, name):

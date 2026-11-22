@@ -14,7 +14,7 @@ import random
 from itertools import combinations
 from operator import itemgetter
 
-from . import adjust, correlate, db, review
+from . import adjust, correlate, db, review, sources
 
 DEFAULT_PARAMS = {
     "alpha": 0.01,         # false-discovery rate the Search controls (Benjamini-Hochberg)
@@ -36,7 +36,7 @@ FAMILY_SEGMENTS = {"rent": 3}
 def family(name):
     """The Family a Series belongs to (e.g. rent.kiel.wg), or None if it is not in one."""
     parts = name.split(".")
-    n = FAMILY_SEGMENTS.get(parts[0])
+    n = FAMILY_SEGMENTS.get(parts[0]) or sources.family_segments().get(parts[0])
     return ".".join(parts[:n]) if n and len(parts) > n else None
 
 
