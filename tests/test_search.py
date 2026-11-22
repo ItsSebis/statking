@@ -56,3 +56,27 @@ def test_short_series_are_too_little_data(conn, seed_series):
     (r,) = run_search(conn)["results"]
 
     assert r["verdict"] == "too_little_data"
+
+
+def test_large_noise_dataset_yields_no_real_correlations(conn, seed_series):
+    # 190 Hypotheses: seed 1 gives 3 uncorrected flukes at alpha=0.01, so only the FDR
+    # correction across the whole Search keeps this at zero.
+    rng = random.Random(1)
+    seed_series(**{f"noise__{i}": random_walk(rng, 200) for i in range(20)})
+
+    snap = run_search(conn)
+
+    assert snap["hypotheses"] == 190
+    assert snap["real_count"] == 0
+
+
+def test_planted_relationship_survives_correction_among_many_hypotheses(conn, seed_series):
+    a, b = related_walks(seed=1)
+    rng = random.Random(3)  # not 1: related_walks(seed=1) would be reproduced as "noise"
+    seed_series(test__a=a, test__b=b, **{f"noise__{i}": random_walk(rng, 200) for i in range(18)})
+
+    snap = run_search(conn)
+
+    assert snap["hypotheses"] == 190
+    assert verdicts(snap)[("test.a", "test.b")] == "real"
+    assert snap["real_count"] == 1
