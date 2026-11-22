@@ -1,8 +1,8 @@
 """The Search: test every Hypothesis (Series pair) and judge it on Adjusted Series.
 
 Single entry point: run_search(conn, params) -> Snapshot. Walking-skeleton scope: lag 0 only,
-first differencing, Spearman, uncorrected significance. Later slices add FDR correction,
-Stability, Derived Pairs, more Lags."""
+first differencing, Spearman, Benjamini-Hochberg FDR correction over the whole Search.
+Later slices add Stability, Derived Pairs, more Lags."""
 import json
 import math
 from itertools import combinations
@@ -10,7 +10,7 @@ from itertools import combinations
 from . import correlate, db
 
 DEFAULT_PARAMS = {
-    "alpha": 0.01,         # significance level (uncorrected in the skeleton)
+    "alpha": 0.01,         # false-discovery rate the Search controls (Benjamini-Hochberg)
     "min_buckets": 30,     # fewer aligned buckets than this -> Too Little Data
     "lags": [0],
 }
@@ -54,11 +54,25 @@ def _judge(conn_cache, a, b, lag, params):
     rho = spearman(xs, ys) if len(xs) >= 3 else None
     if len(xs) < params["min_buckets"] or rho is None:
         return {**out, "verdict": "too_little_data", "reason": "too_few_buckets"}
-    p = _p_value(rho, len(xs))
-    out.update(spearman=rho, p_value=p)
-    if p < params["alpha"]:
-        return {**out, "verdict": "real", "reason": None}
-    return {**out, "verdict": "coincidence", "reason": "not_significant"}
+    return {**out, "spearman": rho, "p_value": _p_value(rho, len(xs)), "verdict": "coincidence",
+            "reason": "not_significant"}
+
+
+def _apply_fdr(results, alpha):
+    """Benjamini-Hochberg over every Hypothesis in the Search (m = all of them, including Too Little
+    Data ones, which can never be Real: the conservative choice). Sets q_value on tested results and
+    promotes those with q <= alpha to Real."""
+    m = len(results)
+    tested = sorted((r for r in results if r["p_value"] is not None), key=lambda r: r["p_value"])
+    q = 1.0
+    for rank in range(len(tested), 0, -1):  # running minimum from the largest p down keeps q monotone
+        r = tested[rank - 1]
+        q = min(q, r["p_value"] * m / rank)
+        r["q_value"] = q
+    for r in results:
+        r.setdefault("q_value", None)
+        if r["q_value"] is not None and r["q_value"] <= alpha:
+            r["verdict"], r["reason"] = "real", None
 
 
 def run_search(conn, params=None):
@@ -75,15 +89,16 @@ def run_search(conn, params=None):
     cache["buckets"] = buckets
     results = [_judge(cache, a, b, lag, params)
                for a, b in combinations(names, 2) for lag in params["lags"]]
+    _apply_fdr(results, params["alpha"])
     ts = db.now()
     cur = conn.execute("INSERT INTO snapshots (ts, params, hypotheses, real_count) VALUES (?,?,?,?)",
                        (ts, json.dumps(params), len(results), sum(r["verdict"] == "real" for r in results)))
     sid = cur.lastrowid
     conn.executemany(
         """INSERT INTO snapshot_results (snapshot_id, series_a, series_b, lag, res, n, spearman,
-           pearson_raw, p_value, verdict, reason) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+           pearson_raw, p_value, q_value, verdict, reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
         [(sid, r["series_a"], r["series_b"], r["lag"], r["res"], r["n"], r["spearman"],
-          r["pearson_raw"], r["p_value"], r["verdict"], r["reason"]) for r in results])
+          r["pearson_raw"], r["p_value"], r["q_value"], r["verdict"], r["reason"]) for r in results])
     conn.commit()
     return latest_snapshot(conn, sid)
 
@@ -95,7 +110,7 @@ def latest_snapshot(conn, snapshot_id=None):
     if row is None:
         return None
     rows = conn.execute(
-        """SELECT series_a, series_b, lag, res, n, spearman, pearson_raw, p_value, verdict, reason
+        """SELECT series_a, series_b, lag, res, n, spearman, pearson_raw, p_value, q_value, verdict, reason
            FROM snapshot_results WHERE snapshot_id=?
            ORDER BY (verdict='real') DESC, ABS(spearman) DESC""", (row["id"],)).fetchall()
     return {"id": row["id"], "ts": row["ts"], "params": json.loads(row["params"]),

@@ -96,10 +96,16 @@ def _migration_2_snapshots(conn):
             PRIMARY KEY (snapshot_id, series_a, series_b, lag));""")
 
 
+def _migration_3_q_value(conn):
+    """FDR-adjusted p-value (Benjamini-Hochberg q) per tested Hypothesis."""
+    conn.execute("ALTER TABLE snapshot_results ADD COLUMN q_value REAL")
+
+
 # (version, function) applied in order, once each. Append only; never edit a shipped migration.
 MIGRATIONS = [
     (1, _migration_1_baseline),
     (2, _migration_2_snapshots),
+    (3, _migration_3_q_value),
 ]
 
 
