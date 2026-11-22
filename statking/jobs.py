@@ -112,7 +112,7 @@ JOBS = {
 
 def _source_job(source, cfg):
     def job(conn):
-        db.put_metrics(conn, source.collect(conn, cfg.params))
+        db.put_metrics(conn, source.collect(conn, sources.run_params(conn, source, cfg.params)))
         conn.commit()
     return job
 

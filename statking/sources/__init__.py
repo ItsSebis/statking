@@ -10,9 +10,14 @@ A Source is ONE module in this package that defines:
     FAMILY   int   optional. Series under NAME sharing their first FAMILY dotted segments
                    form a Family (e.g. rent.kiel.wg with FAMILY = 3); pairs inside one
                    are Derived Pairs. Omit when the Source's Series are independent measures.
+    BACKFILL_FROM  str  optional. ISO date: how far back the Source's official history goes.
 
-Backfill is just `collect` handling a first run: take the start date from
-`params["backfill_from"]` when nothing is stored yet.
+Backfill: a Source with BACKFILL_FROM gets `params["backfill_from"]` set by the runner on its first
+run (no Series stored under NAME yet): the declared date, or the config's own `backfill_from` when
+that is later (config may narrow the range, never exceed it). Later runs get the config params
+unchanged. `collect` takes its start date from `params["backfill_from"]` when nothing is stored.
+Backfill is idempotent: rows are keyed (series, ts) so re-collected points replace, never duplicate.
+Scraped Sources omit BACKFILL_FROM and just accumulate.
 
 Schedule and parameters live in the sources config file (sources.json, override the path
 with STATKING_SOURCES_CONFIG), never in environment variables:
@@ -28,6 +33,7 @@ import json
 import os
 import pkgutil
 from dataclasses import dataclass, field
+from datetime import date
 
 CONFIG_DEFAULT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "sources.json")
 
@@ -42,6 +48,7 @@ class Source:
     collect: object
     family: object = None
     module: str = ""
+    backfill_from: object = None
 
 
 @dataclass
@@ -61,7 +68,24 @@ def load_source(module_name):
     family = getattr(mod, "FAMILY", None)
     if family is not None and (not isinstance(family, int) or family < 1):
         raise InvalidSource(f"{module_name}: FAMILY must be a positive int (leading dotted segments)")
-    return Source(name=name, collect=mod.collect, family=family, module=module_name)
+    backfill_from = getattr(mod, "BACKFILL_FROM", None)
+    if backfill_from is not None:
+        try:
+            date.fromisoformat(backfill_from)
+        except (TypeError, ValueError):
+            raise InvalidSource(f"{module_name}: BACKFILL_FROM must be an ISO date string")
+    return Source(name=name, collect=mod.collect, family=family, module=module_name, backfill_from=backfill_from)
+
+
+def run_params(conn, source, params):
+    """Params for one run of `source`: on its first run, add the backfill start (see module docstring)."""
+    if not source.backfill_from:
+        return params
+    stored = conn.execute("SELECT 1 FROM metrics WHERE series >= ? AND series < ? LIMIT 1",
+                          (source.name + ".", source.name + "/")).fetchone()
+    if stored:
+        return params
+    return {**params, "backfill_from": max(source.backfill_from, params.get("backfill_from", ""))}
 
 
 def discover(package="statking.sources"):
