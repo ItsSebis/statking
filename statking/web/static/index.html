@@ -135,6 +135,7 @@ td.n,th.n{text-align:right}
       </select>
       <span id="searchmeta"></span>
     </div>
+    <details id="healthbox"><summary id="healthsum">Quellen-Zustand</summary><div id="health"></div></details>
     <div id="searchres"></div>
   </section>
   <section id="rent" class="view on">
@@ -316,7 +317,17 @@ async function loadSources() {
   const names = [...new Set(list.map(x => x.name.split(".")[0]))].sort();
   $("#sourcefilter").innerHTML += names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
 }
+async function loadHealth() {
+  const hs = await (await fetch("/api/health")).json();
+  const bad = hs.filter(h => h.consecutive_failures > 0).length;
+  $("#healthsum").textContent = `Quellen-Zustand (${hs.length}${bad ? `, ${bad} mit Fehlern` : ""})`;
+  $("#healthbox").open = bad > 0;
+  $("#health").innerHTML = hs.length ? "<table><tr><th>Quelle</th><th>Letzter Erfolg</th><th>Fehler in Folge</th><th>Letzter Fehler</th></tr>" +
+    hs.map(h => `<tr><td>${esc(h.source)}</td><td>${esc(h.last_success || "nie")}</td><td>${h.consecutive_failures}</td><td>${esc(h.last_error || "")}</td></tr>`).join("") + "</table>"
+    : '<div class="empty">Noch kein Lauf.</div>';
+}
 async function loadSearch() {
+  loadHealth();
   await loadSources();
   const q = new URLSearchParams();
   if ($("#reviewfilter").value) q.set("review_state", $("#reviewfilter").value);

@@ -118,6 +118,12 @@ def _migration_6_pair_reviews(conn):
         PRIMARY KEY (series_a, series_b))""")
 
 
+def _migration_7_source_health(conn):
+    """Per-Source last success and consecutive failures."""
+    conn.execute("""CREATE TABLE source_health (
+        source TEXT PRIMARY KEY, last_success TEXT, consecutive_failures INTEGER NOT NULL DEFAULT 0, last_error TEXT)""")
+
+
 # (version, function) applied in order, once each. Append only; never edit a shipped migration.
 MIGRATIONS = [
     (1, _migration_1_baseline),
@@ -126,6 +132,7 @@ MIGRATIONS = [
     (4, _migration_4_pearson_adjusted),
     (5, _migration_5_adjustment),
     (6, _migration_6_pair_reviews),
+    (7, _migration_7_source_health),
 ]
 
 
