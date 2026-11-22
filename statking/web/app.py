@@ -182,27 +182,29 @@ def layers():
     conn = db.connect(DB_PATH)
     out = []
     for key, (_cid, label, unit) in opendata_sh.DISTRICT_DATASETS.items():
-        row = conn.execute("SELECT MAX(substr(ts,1,4)) FROM district_metrics WHERE dataset=?", (key,)).fetchone()
-        if row and row[0]:
-            out.append({"id": key, "label": label, "unit": unit, "year": row[0]})
+        names = db.place_metric_names(conn, f"{key}.")
+        if not names:
+            continue
+        year = conn.execute("SELECT MAX(substr(ts,1,4)) FROM place_metrics WHERE metric=?", (names[0],)).fetchone()[0]
+        out.append({"id": key, "label": label, "unit": unit, "year": year})
     return out
 
 
 @app.get("/api/layer")
 def layer(id: str, year: Optional[str] = None):
-    """{polygon name: value} for the latest (or given) year. Only the first merkmal of a dataset is used."""
+    """{polygon name: value} for the latest (or given) year. Only the first Place Metric of a dataset is used."""
     conn = db.connect(DB_PATH)
-    if not year:
-        year = conn.execute("SELECT MAX(substr(ts,1,4)) FROM district_metrics WHERE dataset=?", (id,)).fetchone()[0]
-    first = conn.execute("SELECT merkmal FROM district_metrics WHERE dataset=? ORDER BY merkmal LIMIT 1", (id,)).fetchone()
+    names = db.place_metric_names(conn, f"{id}.")
     values = {}
-    if first:
-        for r in conn.execute(
-                "SELECT district, value FROM district_metrics WHERE dataset=? AND merkmal=? AND substr(ts,1,4)=?",
-                (id, first[0], year)):
-            poly = geo.polygon_name(r["district"], cities.district_names("kiel"), "kiel")
+    if names:
+        data = db.read_place_metric(conn, names[0])
+        year = year or max(ts[:4] for per in data.values() for ts in per)
+        known = {p["id"]: p["name"] for p in db.places(conn, kind="district", parent="kiel")}
+        for pid, per in data.items():
+            ts = max((t for t in per if t[:4] == year), default=None)
+            poly = geo.polygon_name(known.get(pid), cities.district_names("kiel"), "kiel") if ts else None
             if poly:
-                values[poly] = r["value"]
+                values[poly] = per[ts]
     return {"id": id, "year": year, "values": values}
 
 
