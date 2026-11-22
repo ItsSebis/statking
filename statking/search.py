@@ -23,6 +23,7 @@ DEFAULT_PARAMS = {
     "lags": [0],           # Lags (in Resolution buckets, b read `lag` after a) tested for every pair
     "seed": 0,             # fixes the bootstrap resamples: same data + seed -> identical p-values
     "bootstrap_samples": 300,
+    "min_places": 10,      # fewer shared Places than this -> Too Little Data (Across-places Correlations)
     "strong_raw": 0.5,     # |Raw Correlation| from which a non-Real pair is blamed on trend/seasonality
 }
 
@@ -137,6 +138,39 @@ def _judge(conn_cache, a, b, lag, params):
     return {**out, "verdict": "coincidence", "reason": _coincidence_reason(raw, ta, tb, res, lag, params)}
 
 
+def _latest_by_place(conn, metric):
+    """A Place Metric's most recent snapshot across Places: {place: value} at its latest timestamp."""
+    by_place = db.read_place_metric(conn, metric)
+    latest = max((ts for series in by_place.values() for ts in series), default=None)
+    return {p: series[latest] for p, series in by_place.items() if series.get(latest) is not None}
+
+
+def _judge_places(a, b, va, vb, params):
+    """One Across-places Hypothesis: Spearman over the Places both Place Metrics cover. There is no
+    time axis, so no trend/seasonality adjustment and no block structure: the null is plain permutation."""
+    shared = sorted(va.keys() & vb.keys())
+    xs, ys = [va[p] for p in shared], [vb[p] for p in shared]
+    out = {"series_a": a, "series_b": b, "lag": 0, "res": "place", "kind": "across_places", "n": len(xs),
+           "pearson_raw": correlate.pearson(xs, ys), "pearson": None, "adjustment": None,
+           "spearman": None, "p_value": None}
+    rho = spearman(xs, ys) if len(xs) >= 3 else None
+    if len(xs) < params["min_places"] or rho is None:
+        return {**out, "verdict": "too_little_data", "reason": "too_few_buckets"}
+    rx, ry = _ranks(xs), _ranks(ys)
+    rng = random.Random(f"{params['seed']}:{a}:{b}")
+    null = []
+    for _ in range(params["bootstrap_samples"]):
+        rng.shuffle(ry)
+        null.append(correlate.pearson(rx, ry))
+    null = [r for r in null if r is not None]
+    se = math.sqrt(sum(r * r for r in null) / len(null)) if null else 0
+    out = {**out, "spearman": rho, "pearson": out["pearson_raw"]}
+    if se == 0:
+        return {**out, "verdict": "too_little_data", "reason": "untestable"}
+    out["p_value"] = math.erfc(abs(rho) / (se * math.sqrt(2)))
+    return {**out, "verdict": "coincidence", "reason": "not_significant"}
+
+
 def _apply_fdr(results, alpha):
     """Benjamini-Hochberg over every Hypothesis in the Search (m = all of them, including Too Little
     Data ones, which can never be Real: the conservative choice). Sets q_value on tested results and
@@ -178,7 +212,7 @@ def _is_stable(xs, ys, rho, params, resamplers):
 def _apply_stability(results, params, resamplers):
     """Demote FDR-Real candidates whose relationship is not present throughout the history."""
     for r in results:
-        if r["verdict"] == "real" and not _is_stable(*r["_xy"], r["spearman"], params, resamplers):
+        if r["verdict"] == "real" and "_xy" in r and not _is_stable(*r["_xy"], r["spearman"], params, resamplers):
             r["verdict"], r["reason"] = "coincidence", "unstable"
 
 
@@ -215,6 +249,10 @@ def run_search(conn, params=None):
     cache["resamplers"] = resamplers
     results = [_derived(cache, a, b, lag) if _is_derived(a, b) else _judge(cache, a, b, lag, params)
                for a, b in combinations(names, 2) for lag in params["lags"]]
+    for r in results:
+        r.setdefault("kind", "over_time")
+    metrics = {m: _latest_by_place(conn, m) for m in db.place_metric_names(conn)}
+    results += [_judge_places(a, b, metrics[a], metrics[b], params) for a, b in combinations(sorted(metrics), 2)]
     hypotheses = [r for r in results if r["verdict"] != "derived"]
     _apply_fdr(hypotheses, params["alpha"])
     _apply_stability(hypotheses, params, resamplers)
@@ -224,9 +262,9 @@ def run_search(conn, params=None):
     sid = cur.lastrowid
     conn.executemany(
         """INSERT INTO snapshot_results (snapshot_id, series_a, series_b, lag, res, n, spearman,
-           pearson_raw, pearson, p_value, q_value, verdict, reason, adjustment) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           pearson_raw, pearson, p_value, q_value, verdict, reason, adjustment, kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         [(sid, r["series_a"], r["series_b"], r["lag"], r["res"], r["n"], r["spearman"],
-          r["pearson_raw"], r["pearson"], r["p_value"], r["q_value"], r["verdict"], r["reason"], r["adjustment"]) for r in results])
+          r["pearson_raw"], r["pearson"], r["p_value"], r["q_value"], r["verdict"], r["reason"], r["adjustment"], r["kind"]) for r in results])
     conn.commit()
     return latest_snapshot(conn, sid)
 
@@ -246,7 +284,7 @@ def latest_snapshot(conn, snapshot_id=None, review_state=None, source=None, res=
         return None
     rows = conn.execute(
         """SELECT s.series_a, s.series_b, s.lag, s.res, s.n, s.spearman, s.pearson_raw, s.pearson, s.p_value,
-                  s.q_value, s.verdict, s.reason, s.adjustment,
+                  s.q_value, s.verdict, s.reason, s.adjustment, s.kind,
                   COALESCE(v.state, 'unreviewed') AS review_state, v.note AS review_note
            FROM snapshot_results s
            LEFT JOIN pair_reviews v ON v.series_a=s.series_a AND v.series_b=s.series_b
