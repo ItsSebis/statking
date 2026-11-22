@@ -64,15 +64,11 @@ CREATE TABLE IF NOT EXISTS geocache (query TEXT PRIMARY KEY, lat REAL, lon REAL,
 """
 
 
-def connect(path: str) -> sqlite3.Connection:
-    d = os.path.dirname(path)
-    if d:
-        os.makedirs(d, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.executescript(SCHEMA + GEO_SCHEMA + HISTORY_SCHEMA)
+def _migration_1_baseline(conn):
+    """The ad hoc column/data migrations that used to run on every connect.
+    Idempotent so the existing production DB (which already has most of this) is unaffected."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(listings)")}
-    for c in ("lat", "lon"):  # lightweight migrations
+    for c in ("lat", "lon"):
         if c not in cols:
             conn.execute(f"ALTER TABLE listings ADD COLUMN {c} REAL")
     if "city" not in cols:
@@ -85,7 +81,49 @@ def connect(path: str) -> sqlite3.Connection:
     conn.execute(
         """INSERT OR IGNORE INTO price_history (source,id,ts,price_eur)
            SELECT source,id,first_seen,price_eur FROM listings WHERE price_eur IS NOT NULL""")
-    conn.commit()
+
+
+# (version, function) applied in order, once each. Append only; never edit a shipped migration.
+MIGRATIONS = [
+    (1, _migration_1_baseline),
+]
+
+
+def _applied_versions(conn) -> set:
+    try:
+        return {r[0] for r in conn.execute("SELECT version FROM schema_migrations")}
+    except sqlite3.OperationalError:
+        return set()
+
+
+def _backup(path: str) -> str:
+    dest = f"{path}.bak-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')}"
+    src = sqlite3.connect(path)
+    dst = sqlite3.connect(dest)
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    return dest
+
+
+def connect(path: str) -> sqlite3.Connection:
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    existing = os.path.exists(path) and os.path.getsize(path) > 0
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    pending = [m for m in MIGRATIONS if m[0] not in _applied_versions(conn)]
+    if pending and existing:
+        _backup(path)  # before anything touches the schema
+    conn.executescript(SCHEMA + GEO_SCHEMA + HISTORY_SCHEMA)
+    conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
+    for version, fn in pending:
+        fn(conn)
+        conn.execute("INSERT INTO schema_migrations VALUES (?,?)", (version, now()))
+        conn.commit()
     return conn
 
 
