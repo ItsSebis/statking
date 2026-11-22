@@ -30,7 +30,7 @@ DEFAULT_PARAMS = {
 # Series-name prefix -> number of leading dotted segments that identify the Family.
 # Only prefixes whose Series are mechanically related are listed (weather.* / wiki.* / chess.* /
 # steam.* Series under one prefix are independent measures, not derivations of each other). Slice 2 makes Families explicit per Source.
-FAMILY_SEGMENTS = {"rent": 3}
+FAMILY_SEGMENTS = {}  # Sources declare their own (rent: wg_gesucht.FAMILY)
 
 
 def family(name):

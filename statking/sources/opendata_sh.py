@@ -10,6 +10,7 @@ import unicodedata
 
 import requests
 
+NAME = "stat"  # Source interface: see statking/sources/__init__.py
 CKAN = "https://opendata.schleswig-holstein.de/api/3/action/package_show"
 UA = "statking/0.1 (personal research)"
 
@@ -133,4 +134,26 @@ def parse_district(text):
         for i, ts in tcols:
             if i < len(r) and (v := num(r[i])) is not None:
                 out.append((r[mi].strip(), r[di].strip(), ts, v))
+    return out
+
+
+def collect(conn, params):
+    """stat.<dataset>.<column> Series; Stadtteil datasets go to district_metrics. One broken dataset must not block the rest."""
+    out = []
+    for key, (cid, layout) in DATASETS.items():
+        try:
+            pts = parse(fetch_csv(cid), layout)
+        except Exception as e:
+            print(f"stat[{key}] failed: {e!r}")
+            continue
+        out += [(f"stat.{key}.{slug(col)}", ts, v) for col, ts, v in pts]
+    for key, (cid, _label, _unit) in DISTRICT_DATASETS.items():
+        try:
+            pts = parse_district(fetch_csv(cid))
+        except Exception as e:
+            print(f"stat[{key}] failed: {e!r}")
+            continue
+        conn.executemany("INSERT OR REPLACE INTO district_metrics VALUES (?,?,?,?,?)",
+                         [(key, m, d, ts, v) for m, d, ts, v in pts])
+    print(f"stat: {len(out)} points")
     return out

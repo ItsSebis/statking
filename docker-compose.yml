@@ -21,9 +21,8 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      # per-job intervals in hours (defaults shown); last run is persisted, restarts don't re-scrape
+      # Source schedules + params (rent cities, wiki articles, chess user...) live in sources.json; last run is persisted, restarts do not re-scrape
       RENT_INTERVAL_HOURS: 24
-      # cities from statking/cities.py (default: all). Every extra city multiplies requests to WG-Gesucht - keep it modest.
       RENT_CITIES: "kiel,hamburg,berlin,muenchen,koeln,frankfurt,leipzig,hannover"
       RENT_MAX_PAGES: 10        # pages per city/category (~20 listings each); big cities are therefore a sample
       RENT_PAUSE_SECONDS: 45    # pause between city/category crawls
