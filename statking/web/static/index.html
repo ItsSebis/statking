@@ -246,16 +246,15 @@ const SECTIONS = [
   {verdict:"too_little_data", title:"Zu wenig Daten", open:false},
   {verdict:"derived", title:"Abgeleitete Paare", open:false},
 ];
-const escHtml = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 function searchTable(rows, s) {
   const f = x => x == null ? "–" : x.toFixed(3);
   const head = "<tr><th>Urteil</th><th>Serie A</th><th>Serie B</th><th>Lag</th><th>n</th><th>roh vs. bereinigt (Pearson)</th><th>Spearman (bereinigt)</th><th>q (FDR)</th><th>Grund</th><th>Prüfung</th></tr>";
   return "<table>" + head + rows.map(r => {
     const i = s.results.indexOf(r);
     const badge = r.verdict === "real" ? '<span class="badge real">Real</span>' : '<span class="badge">' + (r.verdict === "coincidence" ? "Zufall" : r.verdict === "derived" ? "Abgeleitet" : "Zu wenig Daten") + "</span>";
-    return `<tr class="hit" data-i="${i}" title="Im Explorer öffnen"><td>${badge}</td><td>${escHtml(r.series_a)}</td><td>${escHtml(r.series_b)}</td><td>${r.lag}</td><td>${r.n}</td>` +
+    return `<tr class="hit" data-i="${i}" title="Im Explorer öffnen"><td>${badge}</td><td>${esc(r.series_a)}</td><td>${esc(r.series_b)}</td><td>${r.lag}</td><td>${r.n}</td>` +
       `<td class="vs">${f(r.pearson_raw)} → ${f(r.pearson)}</td><td>${f(r.spearman)}</td><td>${r.q_value == null ? "–" : r.q_value.toExponential(1)}</td>` +
-      `<td>${r.reason ? REASON[r.reason] || escHtml(r.reason) : ""}</td><td>${reviewCell(r, i)}</td></tr>`;
+      `<td>${r.reason ? REASON[r.reason] || esc(r.reason) : ""}</td><td>${reviewCell(r, i)}</td></tr>`;
   }).join("") + "</table>";
 }
 function renderSearch(s) {
@@ -303,7 +302,7 @@ async function loadSources() {
   sourcesLoaded = true;
   const list = await (await fetch("/api/series")).json();
   const names = [...new Set(list.map(x => x.name.split(".")[0]))].sort();
-  $("#sourcefilter").innerHTML += names.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join("");
+  $("#sourcefilter").innerHTML += names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
 }
 async function loadSearch() {
   await loadSources();
