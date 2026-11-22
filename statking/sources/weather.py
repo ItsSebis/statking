@@ -2,8 +2,13 @@
 Hourly values are aggregated to daily series."""
 from datetime import date, timedelta
 
+import time
+
 import requests
 
+from .. import cities
+
+NAME = "weather"  # Source interface: see statking/sources/__init__.py
 API = "https://api.brightsky.dev/weather"
 UA = "statking/0.1 (personal research)"
 
@@ -49,3 +54,48 @@ def daily(hours, before):
             "wind_gust_max": max((h["wind_gust_speed"] for h in hs if h["wind_gust_speed"] is not None), default=None),
         }
     return out
+
+
+def _today():
+    return date.today()
+
+
+def station_for(conn, city):
+    """DWD station for a city: fixed override, cached lookup, or nearest station."""
+    if city in cities.WEATHER_STATION_OVERRIDE:
+        return cities.WEATHER_STATION_OVERRIDE[city]
+    row = conn.execute("SELECT value FROM kv WHERE key=?", (f"weather_station.{city}",)).fetchone()
+    if row:
+        return row[0]
+    c = cities.CITIES[city]
+    sid, name, dist = nearest_station(c["lat"], c["lon"])
+    print(f"weather[{city}]: using {name} ({sid}), {dist / 1000:.0f} km away")
+    conn.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (f"weather_station.{city}", sid))
+    conn.commit()
+    return sid
+
+
+def collect(conn, params):
+    """Daily weather Series per city. First run backfills from params['backfill_from']; later runs resume
+    one day before the last stored day."""
+    backfill = params.get("backfill_from", "2024-01-01")
+    pause = params.get("pause_seconds", 1)
+    today = _today()
+    rows = []
+    for name in cities.CITIES:
+        station = station_for(conn, name)
+        last = conn.execute("SELECT MAX(ts) FROM metrics WHERE series=?", (f"weather.{name}.temp_mean",)).fetchone()[0]
+        start = date.fromisoformat(last) - timedelta(days=1) if last else date.fromisoformat(backfill)
+        n = 0
+        while start <= today:
+            end = min(start + timedelta(days=89), today)
+            hours = fetch_hourly(station, start.isoformat(), (end + timedelta(days=1)).isoformat())
+            for day, v in daily(hours, today.isoformat()).items():
+                for k, val in v.items():
+                    if val is not None:
+                        rows.append((f"weather.{name}.{k}", day, val))
+                        n += 1
+            start = end + timedelta(days=1)
+            time.sleep(pause)
+        print(f"weather[{name}]: {n} points")
+    return rows

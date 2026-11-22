@@ -1,0 +1,6 @@
+{
+  "weather": {
+    "interval_hours": 12,
+    "params": {"backfill_from": "2024-01-01", "pause_seconds": 1}
+  }
+}
