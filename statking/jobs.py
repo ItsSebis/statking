@@ -4,7 +4,7 @@ import os
 import time
 from datetime import date, datetime, timedelta, timezone
 
-from . import cities, db, geo, search, sources, steam_job
+from . import cities, db, geo, health, search, sources, steam_job
 from .sources import chess, opendata_sh, wikipedia, wg_gesucht
 
 H = lambda name, default: float(os.environ.get(name, default))
@@ -142,9 +142,11 @@ def run_job(conn, name):
     try:
         fn(conn)
         conn.execute("INSERT OR REPLACE INTO job_runs VALUES (?,?,?,?)", (name, db.now(), 1, None))
+        health.record(conn, name, True)
     except Exception as e:  # one failing source must not stop the others
         print(f"{name} failed: {e!r}")
         conn.execute("INSERT OR REPLACE INTO job_runs VALUES (?,?,?,?)", (name, db.now(), 0, repr(e)[:300]))
+        health.record(conn, name, False, repr(e)[:300])
     conn.commit()
 
 
