@@ -1,6 +1,5 @@
 """WG-Gesucht Kiel scraper. Parses the print-only block of each list card,
 which carries clean id/price/size/district fields."""
-import os
 import random
 import re
 import time
@@ -78,7 +77,7 @@ def parse_page(html: str, city_name: str = "Kiel") -> list:
 def scrape(city: str, category: str, delay=(4.0, 8.0), max_pages=None):
     """Return (items, complete). complete=False if the crawl was cut short (page cap or error), so
     we never mark listings as gone based on a partial view. Raises Blocked on a bot check."""
-    max_pages = max_pages or int(os.environ.get("RENT_MAX_PAGES", MAX_PAGES))
+    max_pages = max_pages or MAX_PAGES
     cname = cities.CITIES[city]["name"]
     s = requests.Session()
     s.headers.update({"User-Agent": UA, "Accept-Language": "de-DE,de;q=0.9"})

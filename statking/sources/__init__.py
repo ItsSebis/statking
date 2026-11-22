@@ -77,13 +77,22 @@ def load_source(module_name):
     return Source(name=name, collect=mod.collect, family=family, module=module_name, backfill_from=backfill_from)
 
 
+def _registered(conn, source):
+    """True once the Source has run before: it stored Series or Place Metrics, or a run succeeded
+    (a Place-Metric-only or legitimately empty Source must not backfill on every run)."""
+    lo, hi = source.name + ".", source.name + "/"
+    return bool(conn.execute(
+        """SELECT 1 FROM metrics WHERE series >= ? AND series < ?
+           UNION ALL SELECT 1 FROM place_metrics WHERE metric >= ? AND metric < ?
+           UNION ALL SELECT 1 FROM job_runs WHERE job=? AND ok=1 LIMIT 1""",
+        (lo, hi, lo, hi, source.name)).fetchone())
+
+
 def run_params(conn, source, params):
     """Params for one run of `source`: on its first run, add the backfill start (see module docstring)."""
     if not source.backfill_from:
         return params
-    stored = conn.execute("SELECT 1 FROM metrics WHERE series >= ? AND series < ? LIMIT 1",
-                          (source.name + ".", source.name + "/")).fetchone()
-    if stored:
+    if _registered(conn, source):
         return params
     return {**params, "backfill_from": max(source.backfill_from, params.get("backfill_from", ""))}
 
@@ -112,6 +121,18 @@ def load_config(path=None):
     return {n: SourceConfig(float(c["interval_hours"]), dict(c.get("params", {}))) for n, c in raw.items()}
 
 
+_family_segments = None
+
+
 def family_segments():
-    """{Series prefix: leading segments identifying the Family} for discovered Sources that declare one."""
-    return {s.name: s.family for s in discover().values() if s.family}
+    """{Series prefix: leading segments identifying the Family} for discovered Sources that declare one.
+    Discovered once and cached; tests call reset_family_segments() after changing the Source set."""
+    global _family_segments
+    if _family_segments is None:
+        _family_segments = {s.name: s.family for s in discover().values() if s.family}
+    return _family_segments
+
+
+def reset_family_segments():
+    global _family_segments
+    _family_segments = None

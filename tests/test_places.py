@@ -81,3 +81,15 @@ def test_layer_endpoint_reads_place_metrics(tmp_path, monkeypatch, conn):
     conn.commit()
     got = TestClient(webapp.app).get("/api/layer", params={"id": "einwohner"}).json()
     assert got["year"] == "2023" and got["values"] == {"Schilksee": 2.0}
+
+
+def test_migration_keeps_dotted_district_names_intact(tmp_path):
+    p = str(tmp_path / "s.db")
+    make_legacy(p)
+    c = sqlite3.connect(p)
+    c.execute("INSERT INTO metrics VALUES ('rent.kiel.wg.eur_m2.St. J\u00fcrgen','2024-01-01',12.0)")
+    c.commit()
+    c.close()
+    conn = db.connect(p)
+    assert db.read_place_metric(conn, "rent.wg.eur_m2") == {"kiel/St. J\u00fcrgen": {"2024-01-01": 12.0}}
+    assert conn.execute("SELECT name FROM places WHERE id='kiel/St. J\u00fcrgen'").fetchone()[0] == "St. J\u00fcrgen"

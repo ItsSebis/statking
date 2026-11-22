@@ -73,3 +73,27 @@ def test_only_places_present_in_both_metrics_are_aligned(conn):
     (r,) = run_search(conn)["results"]
 
     assert r["n"] == 30
+
+
+def test_two_metrics_are_aligned_on_a_common_timestamp(conn):
+    a, b, c = planted(n=40)
+    put_places(conn, "geo.a", a, ts="2023-01-01")
+    put_places(conn, "geo.b", b, ts="2023-01-01")
+    put_places(conn, "geo.a", c, ts="2024-01-01")  # only a has a later snapshot
+
+    (r,) = run_search(conn)["results"]
+
+    assert r["n"] == 40 and r["verdict"] == "real"  # compared at 2023-01-01, not a@2024 vs b@2023
+
+
+def test_resolution_filter_can_select_across_places_rows(conn):
+    a, b, _ = planted()
+    put_places(conn, "geo.a", a)
+    put_places(conn, "geo.b", b)
+    wa, wb = related_walks(seed=1)
+    put_series(conn, "test.a", wa)
+    put_series(conn, "test.b", wb)
+    run_search(conn)
+
+    assert {r["kind"] for r in latest_snapshot(conn, res="place")["results"]} == {"across_places"}
+    assert {r["kind"] for r in latest_snapshot(conn, res="day")["results"]} == {"over_time"}

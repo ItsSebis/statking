@@ -18,6 +18,7 @@ def flaky(monkeypatch):
             raise RuntimeError("boom")
 
     monkeypatch.setitem(jobs.JOBS, "flaky", (job, 1, None))
+    monkeypatch.setattr(jobs, "SOURCE_JOBS", {*jobs.SOURCE_JOBS, "flaky"})
     return state
 
 
@@ -67,3 +68,8 @@ def test_search_compares_only_buckets_with_real_observations(conn, seed_series):
     gap = run_search(conn)["results"][0]
 
     assert 0 < gap["n"] < full - 19  # the 20 missing buckets plus the diffs they break
+
+
+def test_search_job_has_no_source_health(conn, client):
+    jobs.run_job(conn, "search")
+    assert "search" not in {h["source"] for h in client.get("/api/health").json()}
